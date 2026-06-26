@@ -1,7 +1,7 @@
 name: jee_challenge
 description: 180 Days JEE 2027 Challenge Tracker
 
-version: 1.1.0+2
+version: 1.2.0+3
 
 environment:
   sdk: '>=3.3.0 <4.0.0'

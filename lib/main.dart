@@ -128,6 +128,7 @@ class AppModel {
   Map<String, List<Task>> dailyTasks;
   Map<String, List<int>> studyMinutes;
   Map<String, List<Chapter>> subjects;
+  Map<String, Map<String, String>> monthlyPlans; // "YYYY-MM" -> {subject -> plan text}
 
   AppModel({
     this.name = 'JEE Aspirant',
@@ -137,11 +138,13 @@ class AppModel {
     Map<String, List<Task>>? dailyTasks,
     Map<String, List<int>>? studyMinutes,
     Map<String, List<Chapter>>? subjects,
+    Map<String, Map<String, String>>? monthlyPlans,
   })  : startDate = startDate ?? _dateStr(DateTime.now()),
         completedDays = completedDays ?? {},
         dailyTasks = dailyTasks ?? {},
         studyMinutes = studyMinutes ?? {},
-        subjects = subjects ?? _defaultSubjects();
+        subjects = subjects ?? _defaultSubjects(),
+        monthlyPlans = monthlyPlans ?? {};
 
   static Map<String, List<Chapter>> _defaultSubjects() {
     return kSubjectChapters.map((s, chapters) => MapEntry(
@@ -193,6 +196,7 @@ class AppModel {
         'dailyTasks': dailyTasks.map((k, v) => MapEntry(k, v.map((t) => t.toJson()).toList())),
         'studyMinutes': studyMinutes,
         'subjects': subjects.map((k, v) => MapEntry(k, v.map((c) => c.toJson()).toList())),
+        'monthlyPlans': monthlyPlans,
       };
 
   factory AppModel.fromJson(Map<String, dynamic> j) {
@@ -215,6 +219,9 @@ class AppModel {
         k, (v as List).cast<int>(),
       )) ?? {},
       subjects: subs,
+      monthlyPlans: (j['monthlyPlans'] as Map<String, dynamic>?)?.map((k, v) => MapEntry(
+        k, (v as Map<String, dynamic>).map((sk, sv) => MapEntry(sk, sv as String)),
+      )) ?? {},
     );
   }
 
@@ -419,7 +426,7 @@ class _MainScreenState extends State<MainScreen> {
       HomeScreen(model: widget.model, onChanged: widget.onChanged),
       TrackerScreen(model: widget.model, onChanged: widget.onChanged),
       SubjectsScreen(model: widget.model, onChanged: widget.onChanged),
-      TasksScreen(model: widget.model, onChanged: widget.onChanged),
+      PlannerScreen(model: widget.model, onChanged: widget.onChanged),
       SettingsScreen(model: widget.model, onChanged: widget.onChanged),
     ];
     return Scaffold(
@@ -452,7 +459,7 @@ class _MainScreenState extends State<MainScreen> {
               NavigationDestination(icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard_rounded), label: 'Home'),
               NavigationDestination(icon: Icon(Icons.calendar_view_month_outlined), selectedIcon: Icon(Icons.calendar_view_month_rounded), label: 'Tracker'),
               NavigationDestination(icon: Icon(Icons.menu_book_outlined), selectedIcon: Icon(Icons.menu_book_rounded), label: 'Subjects'),
-              NavigationDestination(icon: Icon(Icons.timer_outlined), selectedIcon: Icon(Icons.timer_rounded), label: 'Focus'),
+              NavigationDestination(icon: Icon(Icons.edit_calendar_outlined), selectedIcon: Icon(Icons.edit_calendar_rounded), label: 'Planner'),
               NavigationDestination(icon: Icon(Icons.tune_outlined), selectedIcon: Icon(Icons.tune_rounded), label: 'Settings'),
             ],
           ),
@@ -509,7 +516,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final dayNum = (m.currentDayIndex + 1).clamp(1, 180);
     final isDone = m.completedDays.contains(today);
     final quote = kQuotes[DateTime.now().day % kQuotes.length];
-    final totalMins = m.totalStudyMins;
     final progress = m.totalDone / 180;
     final firstLetter = (m.name.isNotEmpty ? m.name[0] : 'J').toUpperCase();
 
@@ -624,7 +630,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(width: 12),
               _statTile(Icons.task_alt_rounded, kGreen, '${m.totalDone}', 'Days done'),
               const SizedBox(width: 12),
-              _statTile(Icons.schedule_rounded, kBlue, '${totalMins ~/ 60}h', 'Studied'),
+              _statTile(Icons.menu_book_rounded, kBlue, '${m.doneChapters}', 'Chapters'),
             ],
           ),
           const SizedBox(height: 22),
@@ -1037,7 +1043,7 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
               padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
               child: Column(
                 children: [
-                  ...chapters.asMap().entries.map((e) => _chapterRow(e.value, color)),
+                  ...chapters.asMap().entries.map((e) => _chapterRow(chapters, e.key, e.value, color)),
                   const SizedBox(height: 4),
                   GestureDetector(
                     onTap: () => _addChapter(context, name, chapters),
@@ -1064,37 +1070,61 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
     );
   }
 
-  Widget _chapterRow(Chapter ch, Color subjColor) {
+  Widget _chapterRow(List<Chapter> chapters, int idx, Chapter ch, Color subjColor) {
     final pColor = ch.priority == 'high' ? kRed : ch.priority == 'low' ? kGreen : kGold;
-    return GestureDetector(
-      onTap: () { setState(() => ch.done = !ch.done); widget.onChanged(); },
-      behavior: HitTestBehavior.opaque,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 11),
-        child: Row(
-          children: [
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 180),
-              width: 22, height: 22,
-              decoration: BoxDecoration(
-                color: ch.done ? subjColor : Colors.transparent,
-                border: Border.all(color: ch.done ? subjColor : kText3, width: 2),
-                borderRadius: BorderRadius.circular(7),
+    void remove() {
+      setState(() => chapters.remove(ch));
+      widget.onChanged();
+    }
+    return Dismissible(
+      key: ObjectKey(ch),
+      direction: DismissDirection.endToStart,
+      onDismissed: (_) => remove(),
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 16),
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        decoration: BoxDecoration(color: kRed.withOpacity(0.15), borderRadius: BorderRadius.circular(12)),
+        child: const Icon(Icons.delete_outline_rounded, color: kRed, size: 20),
+      ),
+      child: GestureDetector(
+        onTap: () { setState(() => ch.done = !ch.done); widget.onChanged(); },
+        behavior: HitTestBehavior.opaque,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 11),
+          child: Row(
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                width: 22, height: 22,
+                decoration: BoxDecoration(
+                  color: ch.done ? subjColor : Colors.transparent,
+                  border: Border.all(color: ch.done ? subjColor : kText3, width: 2),
+                  borderRadius: BorderRadius.circular(7),
+                ),
+                child: ch.done ? const Icon(Icons.check_rounded, size: 14, color: Colors.white) : null,
               ),
-              child: ch.done ? const Icon(Icons.check_rounded, size: 14, color: Colors.white) : null,
-            ),
-            const SizedBox(width: 13),
-            Expanded(
-              child: Text(ch.name,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: ch.done ? kText3 : kText,
-                    decoration: ch.done ? TextDecoration.lineThrough : null,
-                    decorationColor: kText3,
-                  )),
-            ),
-            Container(width: 7, height: 7, decoration: BoxDecoration(color: pColor, shape: BoxShape.circle)),
-          ],
+              const SizedBox(width: 13),
+              Expanded(
+                child: Text(ch.name,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: ch.done ? kText3 : kText,
+                      decoration: ch.done ? TextDecoration.lineThrough : null,
+                      decorationColor: kText3,
+                    )),
+              ),
+              Container(width: 7, height: 7, decoration: BoxDecoration(color: pColor, shape: BoxShape.circle)),
+              GestureDetector(
+                onTap: remove,
+                behavior: HitTestBehavior.opaque,
+                child: const Padding(
+                  padding: EdgeInsets.only(left: 10),
+                  child: Icon(Icons.close_rounded, size: 18, color: kText3),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1199,182 +1229,82 @@ Widget _sheetField(TextEditingController ctrl, String hint) => TextField(
 // ════════════════════════════════════════════════════════════
 //  FOCUS / TASKS
 // ════════════════════════════════════════════════════════════
-class TasksScreen extends StatefulWidget {
+class PlannerScreen extends StatefulWidget {
   final AppModel model;
   final VoidCallback onChanged;
-  const TasksScreen({super.key, required this.model, required this.onChanged});
+  const PlannerScreen({super.key, required this.model, required this.onChanged});
   @override
-  State<TasksScreen> createState() => _TasksScreenState();
+  State<PlannerScreen> createState() => _PlannerScreenState();
 }
 
-class _TasksScreenState extends State<TasksScreen> {
+class _PlannerScreenState extends State<PlannerScreen> {
   final _ctrl = TextEditingController();
-  int _selectedSub = 0;
-  int _timerSecs = 0;
-  bool _running = false;
-  Timer? _timer;
+  final Map<String, TextEditingController> _planCtrls = {};
+  final Set<String> _openMonths = {};
 
-  static const _subNames = ['Physics', 'Chemistry', 'Maths'];
+  static const _monthNames = [
+    '', 'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
 
   String get _today => _dateStr(DateTime.now());
-  List<int> get _studyToday => widget.model.studyMinutes[_today] ?? [0, 0, 0];
 
-  void _startTimer() {
-    if (_running) return;
-    _running = true;
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      setState(() => _timerSecs++);
-      if (_timerSecs % 60 == 0) {
-        final t = _dateStr(DateTime.now());
-        widget.model.studyMinutes.putIfAbsent(t, () => [0, 0, 0]);
-        widget.model.studyMinutes[t]![_selectedSub]++;
-        widget.onChanged();
-      }
-    });
-    setState(() {});
+  List<DateTime> _months() {
+    final start = DateTime.parse(widget.model.startDate);
+    final target = DateTime.parse(widget.model.targetDate);
+    final months = <DateTime>[];
+    var d = DateTime(start.year, start.month);
+    final end = DateTime(target.year, target.month);
+    while (!d.isAfter(end)) {
+      months.add(d);
+      d = DateTime(d.year, d.month + 1);
+    }
+    return months;
   }
 
-  void _pauseTimer() {
-    _timer?.cancel();
-    setState(() => _running = false);
+  String _monthKey(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}';
+
+  TextEditingController _planCtrl(String monthKey, String subject) {
+    return _planCtrls.putIfAbsent('$monthKey|$subject',
+        () => TextEditingController(text: widget.model.monthlyPlans[monthKey]?[subject] ?? ''));
   }
 
-  void _resetTimer() {
-    _pauseTimer();
-    setState(() => _timerSecs = 0);
+  void _savePlan(String monthKey, String subject, String text) {
+    widget.model.monthlyPlans.putIfAbsent(monthKey, () => {});
+    widget.model.monthlyPlans[monthKey]![subject] = text;
+    widget.model.save();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    _openMonths.add('${now.year}-${now.month.toString().padLeft(2, '0')}');
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
     _ctrl.dispose();
+    for (final c in _planCtrls.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final tasks = widget.model.dailyTasks[_today] ?? [];
-    final study = _studyToday;
-    final color = kSubjectColors[_selectedSub];
-    final h = _timerSecs ~/ 3600;
-    final m = (_timerSecs % 3600) ~/ 60;
-    final s = _timerSecs % 60;
-    final todayTotal = study.fold(0, (a, b) => a + b);
 
     return SafeArea(
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              const Expanded(
-                child: Text('Focus session',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: kText)),
-              ),
-              Text('${todayTotal ~/ 60}h ${todayTotal % 60}m today',
-                  style: const TextStyle(fontSize: 13, color: kText3, fontWeight: FontWeight.w600)),
-            ],
-          ),
-          const SizedBox(height: 18),
-
-          // Subject selector
-          Row(
-            children: List.generate(3, (i) {
-              final selected = _selectedSub == i;
-              final c = kSubjectColors[i];
-              return Expanded(
-                child: GestureDetector(
-                  onTap: () => setState(() => _selectedSub = i),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 180),
-                    margin: EdgeInsets.only(right: i < 2 ? 10 : 0),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    decoration: BoxDecoration(
-                      color: selected ? c.withOpacity(0.14) : kSurface,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: selected ? c : kStroke, width: 1.5),
-                    ),
-                    child: Column(
-                      children: [
-                        Icon(kSubjectIcons[i], color: selected ? c : kText3, size: 24),
-                        const SizedBox(height: 7),
-                        Text(_subNames[i],
-                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: selected ? c : kText3)),
-                        const SizedBox(height: 3),
-                        Text('${(study.length > i ? study[i] : 0) ~/ 60}h ${(study.length > i ? study[i] : 0) % 60}m',
-                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: kText2)),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            }),
-          ),
-          const SizedBox(height: 18),
-
-          // Timer
-          Panel(
-            padding: const EdgeInsets.symmetric(vertical: 28),
-            child: Column(
-              children: [
-                Text(
-                  '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}',
-                  style: TextStyle(
-                    fontSize: 52, fontWeight: FontWeight.w800, color: color,
-                    fontFeatures: const [FontFeature.tabularFigures()], letterSpacing: 1),
-                ),
-                const SizedBox(height: 6),
-                Text(_running ? 'Recording ${_subNames[_selectedSub]}…' : 'Paused',
-                    style: const TextStyle(fontSize: 13, color: kText3, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 22),
-                Row(
-                  children: [
-                    Expanded(
-                      flex: 2,
-                      child: GestureDetector(
-                        onTap: _running ? _pauseTimer : _startTimer,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 15),
-                          decoration: BoxDecoration(
-                            color: _running ? kSurfaceHi : color,
-                            borderRadius: BorderRadius.circular(14),
-                            border: _running ? Border.all(color: kStroke) : null,
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(_running ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                                  color: _running ? kText : Colors.white, size: 22),
-                              const SizedBox(width: 6),
-                              Text(_running ? 'Pause' : 'Start',
-                                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _running ? kText : Colors.white)),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: _resetTimer,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 15),
-                          decoration: BoxDecoration(
-                            color: kSurfaceHi,
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: kStroke),
-                          ),
-                          child: const Icon(Icons.refresh_rounded, color: kText2, size: 22),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
+          const Text('Planner',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: kText)),
+          const SizedBox(height: 4),
+          const Text('Plan each month and your day',
+              style: TextStyle(fontSize: 13, color: kText3)),
+          const SizedBox(height: 20),
 
           // Tasks
           Row(
@@ -1433,6 +1363,135 @@ class _TasksScreenState extends State<TasksScreen> {
             )
           else
             ...tasks.asMap().entries.map((e) => _taskRow(e.key, e.value)),
+
+          const SizedBox(height: 26),
+          sectionLabel('Monthly planner'),
+          ..._months().map(_monthCard),
+        ],
+      ),
+    );
+  }
+
+  Widget _monthCard(DateTime month) {
+    final key = _monthKey(month);
+    final isOpen = _openMonths.contains(key);
+    final subjects = widget.model.subjects.keys.toList();
+    final filled = widget.model.monthlyPlans[key]?.values.where((v) => v.trim().isNotEmpty).length ?? 0;
+    final isCurrent = key == '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: kSurface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: isCurrent ? kAccent.withOpacity(0.5) : kStroke),
+      ),
+      child: Column(
+        children: [
+          GestureDetector(
+            onTap: () => setState(() => isOpen ? _openMonths.remove(key) : _openMonths.add(key)),
+            behavior: HitTestBehavior.opaque,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  Container(
+                    width: 46, height: 46,
+                    decoration: BoxDecoration(color: kAccentDim, borderRadius: BorderRadius.circular(13)),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(month.month.toString().padLeft(2, '0'),
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: kAccent, height: 1)),
+                        Text("'${month.year % 100}",
+                            style: const TextStyle(fontSize: 10, color: kAccent, height: 1.4)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Text('${_monthNames[month.month]} ${month.year}',
+                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: kText)),
+                            if (isCurrent) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                decoration: BoxDecoration(color: kAccentDim, borderRadius: BorderRadius.circular(99)),
+                                child: const Text('NOW',
+                                    style: TextStyle(fontSize: 9, color: kAccent, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+                              ),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(filled == 0 ? 'No plan yet' : '$filled of ${subjects.length} subjects planned',
+                            style: const TextStyle(fontSize: 12, color: kText3, fontWeight: FontWeight.w600)),
+                      ],
+                    ),
+                  ),
+                  AnimatedRotation(
+                    turns: isOpen ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 200),
+                    child: const Icon(Icons.keyboard_arrow_down_rounded, color: kText3),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (isOpen) ...[
+            const Divider(height: 1, color: kStroke),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+              child: Column(
+                children: List.generate(subjects.length, (i) {
+                  final subject = subjects[i];
+                  final c = kSubjectColors[i % kSubjectColors.length];
+                  return Padding(
+                    padding: EdgeInsets.only(bottom: i < subjects.length - 1 ? 14 : 0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(kSubjectIcons[i % kSubjectIcons.length], size: 16, color: c),
+                            const SizedBox(width: 7),
+                            Text(subject,
+                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: c)),
+                          ],
+                        ),
+                        const SizedBox(height: 7),
+                        TextField(
+                          controller: _planCtrl(key, subject),
+                          onChanged: (v) => _savePlan(key, subject, v),
+                          minLines: 2,
+                          maxLines: 6,
+                          textCapitalization: TextCapitalization.sentences,
+                          style: const TextStyle(color: kText, fontSize: 14, height: 1.4),
+                          cursorColor: c,
+                          decoration: InputDecoration(
+                            hintText: 'What will you cover in $subject this month?',
+                            hintStyle: const TextStyle(color: kText3, fontSize: 13),
+                            filled: true,
+                            fillColor: kSurfaceHi,
+                            contentPadding: const EdgeInsets.all(13),
+                            enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: kStroke)),
+                            focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: c, width: 1.5)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -1532,7 +1591,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final m = widget.model;
-    final totalMins = m.totalStudyMins;
 
     return SafeArea(
       child: ListView(
@@ -1598,8 +1656,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _statRow(Icons.task_alt_rounded, kGreen, 'Days completed', '${m.totalDone}'),
                 const Divider(height: 22, color: kStroke),
                 _statRow(Icons.local_fire_department_rounded, kAccent, 'Current streak', '${m.streak} days'),
-                const Divider(height: 22, color: kStroke),
-                _statRow(Icons.schedule_rounded, kBlue, 'Total study time', '${totalMins ~/ 60}h ${totalMins % 60}m'),
                 const Divider(height: 22, color: kStroke),
                 _statRow(Icons.menu_book_rounded, kViolet, 'Chapters done', '${m.doneChapters}/${m.totalChapters}'),
                 const Divider(height: 22, color: kStroke),
