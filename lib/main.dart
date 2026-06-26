@@ -3,30 +3,52 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui' show FontFeature;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light,
+    systemNavigationBarColor: kSurface,
+    systemNavigationBarIconBrightness: Brightness.light,
   ));
   runApp(const JEEApp());
 }
 
-// ── COLORS ──
-const kBg = Color(0xFF0A0E1A);
-const kSurface = Color(0xFF141929);
-const kSurface2 = Color(0xFF1E2540);
-const kAccent = Color(0xFF6366F1);
-const kGold = Color(0xFFF59E0B);
-const kGreen = Color(0xFF10B981);
-const kRed = Color(0xFFEF4444);
-const kBlue = Color(0xFF3B82F6);
-const kText = Color(0xFFE2E8F0);
-const kText2 = Color(0xFF94A3B8);
-const kText3 = Color(0xFF475569);
+// ════════════════════════════════════════════════════════════
+//  DESIGN SYSTEM
+// ════════════════════════════════════════════════════════════
+const kBg = Color(0xFF0A0B0F);
+const kSurface = Color(0xFF141821);
+const kSurfaceHi = Color(0xFF1C212C);
+const kStroke = Color(0xFF262C38);
+const kAccent = Color(0xFFFF6B4A); // warm coral
+const kAccentDim = Color(0xFF3A2420);
+const kGold = Color(0xFFFFB02E);
+const kGreen = Color(0xFF2DD4A7);
+const kRed = Color(0xFFFF5A6E);
+const kBlue = Color(0xFF4F9DFF);
+const kViolet = Color(0xFFA78BFA);
+const kText = Color(0xFFF1F4F9);
+const kText2 = Color(0xFF99A2B2);
+const kText3 = Color(0xFF5A6478);
 
-// ── STATIC DATA ──
+// Subject identity colors
+const kPhysics = Color(0xFF4F9DFF);
+const kChemistry = Color(0xFF2DD4A7);
+const kMaths = Color(0xFFFFB02E);
+const kSubjectColors = [kPhysics, kChemistry, kMaths];
+const kSubjectIcons = [
+  Icons.bolt_rounded,
+  Icons.science_rounded,
+  Icons.functions_rounded,
+];
+
+// ════════════════════════════════════════════════════════════
+//  STATIC DATA
+// ════════════════════════════════════════════════════════════
 const Map<String, List<String>> kSubjectChapters = {
   'Physics': [
     'Kinematics', 'Laws of Motion', 'Work Energy Power', 'Rotational Motion',
@@ -73,11 +95,13 @@ const List<List<String>> kQuotes = [
   ['Every champion was once a contender that refused to give up.', 'Unknown'],
 ];
 
-// ── DATA MODEL ──
+// ════════════════════════════════════════════════════════════
+//  DATA MODEL  (unchanged — preserves saved progress)
+// ════════════════════════════════════════════════════════════
 class Chapter {
   String name;
   bool done;
-  String priority; // 'high' | 'med' | 'low'
+  String priority;
   Chapter({required this.name, this.done = false, this.priority = 'med'});
   Chapter.fromJson(Map<String, dynamic> j)
       : name = j['name'] ?? '',
@@ -102,7 +126,7 @@ class AppModel {
   String targetDate;
   Set<String> completedDays;
   Map<String, List<Task>> dailyTasks;
-  Map<String, List<int>> studyMinutes; // date -> [phy, che, mat]
+  Map<String, List<int>> studyMinutes;
   Map<String, List<Chapter>> subjects;
 
   AppModel({
@@ -125,9 +149,6 @@ class AppModel {
     ));
   }
 
-  static String _dateStr(DateTime d) =>
-      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-
   String dateForDay(int i) {
     final d = DateTime.parse(startDate).add(Duration(days: i));
     return _dateStr(d);
@@ -136,7 +157,7 @@ class AppModel {
   int get currentDayIndex {
     final now = DateTime.now();
     final start = DateTime.parse(startDate);
-    return now.difference(start).inDays;
+    return now.difference(DateTime(start.year, start.month, start.day)).inDays;
   }
 
   int get totalDone => completedDays.length;
@@ -156,8 +177,13 @@ class AppModel {
     return s;
   }
 
-  int get totalStudyMins => studyMinutes.values
-      .fold(0, (a, v) => a + v.fold(0, (x, y) => x + y));
+  int get totalStudyMins =>
+      studyMinutes.values.fold(0, (a, v) => a + v.fold(0, (x, y) => x + y));
+
+  int get totalChapters =>
+      subjects.values.fold(0, (a, v) => a + v.length);
+  int get doneChapters =>
+      subjects.values.fold(0, (a, v) => a + v.where((c) => c.done).length);
 
   Map<String, dynamic> toJson() => {
         'name': name,
@@ -209,7 +235,9 @@ class AppModel {
   }
 }
 
-// ── APP ──
+// ════════════════════════════════════════════════════════════
+//  APP ROOT
+// ════════════════════════════════════════════════════════════
 class JEEApp extends StatefulWidget {
   const JEEApp({super.key});
   @override
@@ -233,49 +261,147 @@ class _JEEAppState extends State<JEEApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '180 Days JEE 2027',
+      title: '180 Days · JEE 2027',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
         brightness: Brightness.dark,
         scaffoldBackgroundColor: kBg,
+        fontFamily: 'Roboto',
         colorScheme: const ColorScheme.dark(
           primary: kAccent,
+          secondary: kGold,
           surface: kSurface,
-          background: kBg,
         ),
-        bottomNavigationBarTheme: const BottomNavigationBarThemeData(
-          backgroundColor: kSurface,
-          selectedItemColor: kAccent,
-          unselectedItemColor: kText3,
-          type: BottomNavigationBarType.fixed,
-          elevation: 0,
-        ),
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: kSurface2,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: Colors.white10),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: Colors.white10),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: kAccent),
-          ),
-        ),
+        splashColor: kAccent.withOpacity(0.06),
+        highlightColor: Colors.transparent,
       ),
       home: _model == null
-          ? const Scaffold(body: Center(child: CircularProgressIndicator(color: kAccent)))
+          ? const Scaffold(
+              body: Center(child: CircularProgressIndicator(color: kAccent, strokeWidth: 2)))
           : MainScreen(model: _model!, onChanged: _onChanged),
     );
   }
 }
 
-// ── MAIN SCREEN ──
+// ════════════════════════════════════════════════════════════
+//  SHARED WIDGETS
+// ════════════════════════════════════════════════════════════
+
+/// Circular progress ring with a soft glow.
+class ProgressRing extends StatelessWidget {
+  final double progress; // 0..1
+  final double size;
+  final double stroke;
+  final Color color;
+  final Widget? child;
+  const ProgressRing({
+    super.key,
+    required this.progress,
+    this.size = 200,
+    this.stroke = 13,
+    this.color = kAccent,
+    this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(
+        painter: _RingPainter(progress: progress.clamp(0, 1), color: color, stroke: stroke),
+        child: Center(child: child),
+      ),
+    );
+  }
+}
+
+class _RingPainter extends CustomPainter {
+  final double progress;
+  final Color color;
+  final double stroke;
+  _RingPainter({required this.progress, required this.color, required this.stroke});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final radius = (math.min(size.width, size.height) - stroke) / 2;
+    final rect = Rect.fromCircle(center: center, radius: radius);
+
+    // Track
+    final track = Paint()
+      ..color = kStroke
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = stroke
+      ..strokeCap = StrokeCap.round;
+    canvas.drawCircle(center, radius, track);
+
+    if (progress <= 0) return;
+
+    final sweep = 2 * math.pi * progress;
+    const start = -math.pi / 2;
+
+    // Glow
+    final glow = Paint()
+      ..color = color.withOpacity(0.35)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = stroke
+      ..strokeCap = StrokeCap.round
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
+    canvas.drawArc(rect, start, sweep, false, glow);
+
+    // Arc
+    final arc = Paint()
+      ..shader = SweepGradient(
+        startAngle: 0,
+        endAngle: 2 * math.pi,
+        colors: [color.withOpacity(0.55), color],
+        transform: const GradientRotation(-math.pi / 2),
+      ).createShader(rect)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = stroke
+      ..strokeCap = StrokeCap.round;
+    canvas.drawArc(rect, start, sweep, false, arc);
+  }
+
+  @override
+  bool shouldRepaint(_RingPainter old) =>
+      old.progress != progress || old.color != color || old.stroke != stroke;
+}
+
+/// Standard surface card.
+class Panel extends StatelessWidget {
+  final Widget child;
+  final EdgeInsets padding;
+  final Color? color;
+  const Panel({super.key, required this.child, this.padding = const EdgeInsets.all(18), this.color});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        color: color ?? kSurface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: kStroke, width: 1),
+      ),
+      child: child,
+    );
+  }
+}
+
+Widget sectionLabel(String text) => Padding(
+  padding: const EdgeInsets.only(left: 4, bottom: 10),
+  child: Text(
+    text.toUpperCase(),
+    style: const TextStyle(
+      fontSize: 11, fontWeight: FontWeight.w700, color: kText3, letterSpacing: 1.5),
+  ),
+);
+
+// ════════════════════════════════════════════════════════════
+//  MAIN SCREEN  (nav shell)
+// ════════════════════════════════════════════════════════════
 class MainScreen extends StatefulWidget {
   final AppModel model;
   final VoidCallback onChanged;
@@ -298,22 +424,47 @@ class _MainScreenState extends State<MainScreen> {
     ];
     return Scaffold(
       body: IndexedStack(index: _tab, children: screens),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _tab,
-        onTap: (i) => setState(() => _tab = i),
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home_rounded), label: 'Home'),
-          BottomNavigationBarItem(icon: Icon(Icons.grid_view_rounded), label: 'Tracker'),
-          BottomNavigationBarItem(icon: Icon(Icons.menu_book_rounded), label: 'Subjects'),
-          BottomNavigationBarItem(icon: Icon(Icons.task_alt_rounded), label: 'Tasks'),
-          BottomNavigationBarItem(icon: Icon(Icons.settings_rounded), label: 'Settings'),
-        ],
+      bottomNavigationBar: Container(
+        decoration: const BoxDecoration(
+          color: kSurface,
+          border: Border(top: BorderSide(color: kStroke, width: 1)),
+        ),
+        child: NavigationBarTheme(
+          data: NavigationBarThemeData(
+            backgroundColor: Colors.transparent,
+            indicatorColor: kAccentDim,
+            labelTextStyle: WidgetStateProperty.resolveWith((s) => TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: s.contains(WidgetState.selected) ? kAccent : kText3,
+            )),
+            iconTheme: WidgetStateProperty.resolveWith((s) => IconThemeData(
+              size: 24,
+              color: s.contains(WidgetState.selected) ? kAccent : kText3,
+            )),
+          ),
+          child: NavigationBar(
+            height: 66,
+            selectedIndex: _tab,
+            onDestinationSelected: (i) => setState(() => _tab = i),
+            labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+            destinations: const [
+              NavigationDestination(icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard_rounded), label: 'Home'),
+              NavigationDestination(icon: Icon(Icons.calendar_view_month_outlined), selectedIcon: Icon(Icons.calendar_view_month_rounded), label: 'Tracker'),
+              NavigationDestination(icon: Icon(Icons.menu_book_outlined), selectedIcon: Icon(Icons.menu_book_rounded), label: 'Subjects'),
+              NavigationDestination(icon: Icon(Icons.timer_outlined), selectedIcon: Icon(Icons.timer_rounded), label: 'Focus'),
+              NavigationDestination(icon: Icon(Icons.tune_outlined), selectedIcon: Icon(Icons.tune_rounded), label: 'Settings'),
+            ],
+          ),
+        ),
       ),
     );
   }
 }
 
-// ── HOME SCREEN ──
+// ════════════════════════════════════════════════════════════
+//  HOME
+// ════════════════════════════════════════════════════════════
 class HomeScreen extends StatefulWidget {
   final AppModel model;
   final VoidCallback onChanged;
@@ -344,161 +495,251 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
+  String get _greeting {
+    final h = DateTime.now().hour;
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+  }
+
   @override
   Widget build(BuildContext context) {
     final m = widget.model;
     final today = _dateStr(DateTime.now());
-    final dayNum = m.currentDayIndex + 1;
+    final dayNum = (m.currentDayIndex + 1).clamp(1, 180);
     final isDone = m.completedDays.contains(today);
     final quote = kQuotes[DateTime.now().day % kQuotes.length];
     final totalMins = m.totalStudyMins;
+    final progress = m.totalDone / 180;
+    final firstLetter = (m.name.isNotEmpty ? m.name[0] : 'J').toUpperCase();
 
     return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Hero card
-            Container(
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [kSurface2, Color(0xFF0D1230)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        children: [
+          // ── Greeting row ──
+          Row(
+            children: [
+              Container(
+                width: 46, height: 46,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(colors: [kAccent, kGold]),
+                  borderRadius: BorderRadius.circular(14),
                 ),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white.withOpacity(0.05)),
+                child: Center(
+                  child: Text(firstLetter,
+                      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white)),
+                ),
               ),
-              padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_greeting, style: const TextStyle(fontSize: 13, color: kText3)),
+                    Text(m.name,
+                        maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: kText)),
+                  ],
+                ),
+              ),
+              _flameChip(m.streak),
+            ],
+          ),
+          const SizedBox(height: 22),
+
+          // ── Hero ring ──
+          Center(
+            child: ProgressRing(
+              progress: progress,
+              size: 230,
+              stroke: 15,
+              color: kAccent,
               child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    'Day ${dayNum.clamp(1, 180)}',
-                    style: const TextStyle(fontSize: 52, fontWeight: FontWeight.w900, color: kGold, height: 1),
-                  ),
-                  const SizedBox(height: 4),
-                  const Text('of 180 Days', style: TextStyle(color: kText2, fontSize: 14)),
+                  const Text('DAY', style: TextStyle(fontSize: 12, color: kText3, letterSpacing: 4, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 2),
+                  Text('$dayNum',
+                      style: const TextStyle(fontSize: 68, fontWeight: FontWeight.w800, color: kText, height: 1)),
+                  Text('of 180',
+                      style: TextStyle(fontSize: 14, color: kText2, fontWeight: FontWeight.w500)),
                   const SizedBox(height: 6),
-                  Text(
-                    '${_fmt(DateTime.parse(m.startDate))} → ${_fmt(DateTime.parse(m.targetDate))}',
-                    style: const TextStyle(color: kText3, fontSize: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: kAccentDim,
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                    child: Text('${(progress * 100).round()}% complete',
+                        style: const TextStyle(fontSize: 12, color: kAccent, fontWeight: FontWeight.w700)),
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 12),
+          ),
+          const SizedBox(height: 24),
 
-            // Countdown
-            Row(children: [
-              _cdBox(_remaining.inDays.toString(), 'Days to JEE'),
-              const SizedBox(width: 8),
-              _cdBox((_remaining.inHours % 24).toString(), 'Hours'),
-              const SizedBox(width: 8),
-              _cdBox((_remaining.inMinutes % 60).toString(), 'Minutes'),
-            ]),
-            const SizedBox(height: 8),
-
-            // Stats row
-            Row(children: [
-              _statBox('🔥', m.streak.toString(), 'Streak'),
-              const SizedBox(width: 8),
-              _statBox('✅', m.totalDone.toString(), 'Days Done'),
-              const SizedBox(width: 8),
-              _statBox('⏱', '${totalMins ~/ 60}h', 'Study Time'),
-            ]),
-            const SizedBox(height: 12),
-
-            // Quote
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF1E1535), Color(0xFF0D1A2A)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
+          // ── Countdown strip ──
+          Panel(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            child: Row(
+              children: [
+                Container(
+                  width: 42, height: 42,
+                  decoration: BoxDecoration(color: kAccentDim, borderRadius: BorderRadius.circular(12)),
+                  child: const Icon(Icons.flag_rounded, color: kAccent, size: 22),
                 ),
-                borderRadius: BorderRadius.circular(14),
-                border: const Border(left: BorderSide(color: kAccent, width: 3)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('"${quote[0]}"',
-                      style: const TextStyle(color: kText, fontSize: 14, fontStyle: FontStyle.italic, height: 1.6)),
-                  const SizedBox(height: 8),
-                  Text('— ${quote[1]}',
-                      style: const TextStyle(color: kAccent, fontSize: 12, fontWeight: FontWeight.w600)),
-                ],
-              ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('JEE 2027 countdown',
+                          style: TextStyle(fontSize: 12, color: kText3, fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 3),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic,
+                        children: [
+                          _cdUnit('${_remaining.inDays}', 'd'),
+                          const SizedBox(width: 8),
+                          _cdUnit('${_remaining.inHours % 24}', 'h'),
+                          const SizedBox(width: 8),
+                          _cdUnit('${_remaining.inMinutes % 60}', 'm'),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
+          ),
+          const SizedBox(height: 12),
 
-            // Mark Today Done button
-            FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: isDone ? kGreen : kAccent,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-              ),
-              onPressed: () {
-                if (isDone) {
-                  widget.model.completedDays.remove(today);
-                } else {
-                  widget.model.completedDays.add(today);
-                }
-                widget.onChanged();
-              },
-              child: Text(
-                isDone ? '✓  Today Done! Tap to undo' : 'Mark Today as Done  ✓',
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, letterSpacing: .5),
-              ),
+          // ── Stat chips ──
+          Row(
+            children: [
+              _statTile(Icons.local_fire_department_rounded, kAccent, '${m.streak}', 'Streak'),
+              const SizedBox(width: 12),
+              _statTile(Icons.task_alt_rounded, kGreen, '${m.totalDone}', 'Days done'),
+              const SizedBox(width: 12),
+              _statTile(Icons.schedule_rounded, kBlue, '${totalMins ~/ 60}h', 'Studied'),
+            ],
+          ),
+          const SizedBox(height: 22),
+
+          // ── Quote ──
+          sectionLabel('Daily fuel'),
+          Panel(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.format_quote_rounded, color: kAccent.withOpacity(0.7), size: 28),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(quote[0],
+                          style: const TextStyle(fontSize: 15, color: kText, height: 1.5, fontWeight: FontWeight.w500)),
+                      const SizedBox(height: 8),
+                      Text('— ${quote[1]}',
+                          style: const TextStyle(fontSize: 12, color: kText3, fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 22),
+
+          // ── CTA ──
+          _ctaButton(isDone, today),
+        ],
       ),
     );
   }
 
-  Widget _cdBox(String val, String label) => Expanded(
-    child: Container(
-      padding: const EdgeInsets.symmetric(vertical: 14),
-      decoration: BoxDecoration(color: kSurface, borderRadius: BorderRadius.circular(12)),
+  Widget _flameChip(int streak) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    decoration: BoxDecoration(
+      color: kSurfaceHi,
+      borderRadius: BorderRadius.circular(99),
+      border: Border.all(color: kStroke),
+    ),
+    child: Row(
+      children: [
+        const Icon(Icons.local_fire_department_rounded, color: kAccent, size: 18),
+        const SizedBox(width: 5),
+        Text('$streak', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: kText)),
+      ],
+    ),
+  );
+
+  Widget _cdUnit(String v, String u) => Row(
+    crossAxisAlignment: CrossAxisAlignment.baseline,
+    textBaseline: TextBaseline.alphabetic,
+    children: [
+      Text(v, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: kText, fontFeatures: [FontFeature.tabularFigures()])),
+      Text(u, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: kText3)),
+    ],
+  );
+
+  Widget _statTile(IconData icon, Color c, String v, String l) => Expanded(
+    child: Panel(
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
       child: Column(
         children: [
-          Text(val, style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: kAccent)),
-          const SizedBox(height: 3),
-          Text(label, style: const TextStyle(fontSize: 10, color: kText3, letterSpacing: .5)),
+          Icon(icon, color: c, size: 24),
+          const SizedBox(height: 8),
+          Text(v, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: kText)),
+          Text(l, style: const TextStyle(fontSize: 11, color: kText3, fontWeight: FontWeight.w600)),
         ],
       ),
     ),
   );
 
-  Widget _statBox(String icon, String val, String label) => Expanded(
-    child: Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: kSurface, borderRadius: BorderRadius.circular(12)),
+  Widget _ctaButton(bool isDone, String today) => GestureDetector(
+    onTap: () {
+      if (isDone) {
+        widget.model.completedDays.remove(today);
+      } else {
+        widget.model.completedDays.add(today);
+      }
+      widget.onChanged();
+    },
+    child: AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
+      padding: const EdgeInsets.symmetric(vertical: 18),
+      decoration: BoxDecoration(
+        gradient: isDone ? null : const LinearGradient(colors: [kAccent, Color(0xFFFF8A5B)]),
+        color: isDone ? kSurfaceHi : null,
+        borderRadius: BorderRadius.circular(18),
+        border: isDone ? Border.all(color: kGreen, width: 1.5) : null,
+        boxShadow: isDone ? null : [BoxShadow(color: kAccent.withOpacity(0.35), blurRadius: 20, offset: const Offset(0, 6))],
+      ),
       child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Text(icon, style: const TextStyle(fontSize: 24)),
-          const SizedBox(width: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(val, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: kGold)),
-              Text(label, style: const TextStyle(fontSize: 10, color: kText3)),
-            ],
+          Icon(isDone ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
+              color: isDone ? kGreen : Colors.white, size: 22),
+          const SizedBox(width: 10),
+          Text(
+            isDone ? 'Completed today — tap to undo' : 'Mark today complete',
+            style: TextStyle(
+              fontSize: 16, fontWeight: FontWeight.w700,
+              color: isDone ? kGreen : Colors.white),
           ),
         ],
       ),
     ),
   );
-
-  String _fmt(DateTime d) =>
-      '${d.day} ${['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.month]} ${d.year}';
 }
 
-// ── TRACKER SCREEN ──
+// ════════════════════════════════════════════════════════════
+//  TRACKER
+// ════════════════════════════════════════════════════════════
 class TrackerScreen extends StatelessWidget {
   final AppModel model;
   final VoidCallback onChanged;
@@ -507,32 +748,57 @@ class TrackerScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final today = _dateStr(DateTime.now());
-    int done = 0;
+    final done = model.totalDone;
+    final pct = done / 180;
+    final cols = MediaQuery.of(context).size.width > 500 ? 20 : 12;
 
     return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Row(
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        children: [
+          const Text('Your 180 days',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: kText)),
+          const SizedBox(height: 4),
+          Text('Tap any day up to today to log it',
+              style: TextStyle(fontSize: 13, color: kText3)),
+          const SizedBox(height: 18),
+
+          // Progress header
+          Panel(
+            child: Column(
               children: [
-                const Text('180 Day Grid', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-                const Spacer(),
-                _tStat(model.totalDone.toString(), 'Done', kGreen),
-                const SizedBox(width: 8),
-                _tStat((180 - model.totalDone).toString(), 'Left', kText3),
-                const SizedBox(width: 8),
-                _tStat('${(model.totalDone / 180 * 100).round()}%', '%', kGold),
+                Row(
+                  children: [
+                    _miniStat('$done', 'Done', kGreen),
+                    Container(width: 1, height: 34, color: kStroke),
+                    _miniStat('${180 - done}', 'Remaining', kText2),
+                    Container(width: 1, height: 34, color: kStroke),
+                    _miniStat('${(pct * 100).round()}%', 'Progress', kAccent),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(99),
+                  child: LinearProgressIndicator(
+                    value: pct, minHeight: 8,
+                    backgroundColor: kStroke,
+                    valueColor: const AlwaysStoppedAnimation(kAccent),
+                  ),
+                ),
               ],
             ),
-            const SizedBox(height: 14),
-            GridView.builder(
+          ),
+          const SizedBox(height: 18),
+
+          // Grid
+          Panel(
+            child: GridView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: MediaQuery.of(context).size.width > 500 ? 18 : 12,
-                crossAxisSpacing: 4,
-                mainAxisSpacing: 4,
+                crossAxisCount: cols,
+                crossAxisSpacing: 5,
+                mainAxisSpacing: 5,
               ),
               itemCount: 180,
               itemBuilder: (ctx, i) {
@@ -540,12 +806,15 @@ class TrackerScreen extends StatelessWidget {
                 final isDone = model.completedDays.contains(date);
                 final isToday = date == today;
                 final isPast = date.compareTo(today) < 0;
-                if (isDone) done++;
 
                 Color bg;
-                if (isDone) bg = kGreen;
-                else if (isPast && !isDone) bg = const Color(0xFF7F1D1D);
-                else bg = kSurface2;
+                if (isDone) {
+                  bg = kGreen;
+                } else if (isPast) {
+                  bg = kRed.withOpacity(0.18);
+                } else {
+                  bg = kSurfaceHi;
+                }
 
                 return GestureDetector(
                   onTap: () {
@@ -560,51 +829,47 @@ class TrackerScreen extends StatelessWidget {
                   child: Container(
                     decoration: BoxDecoration(
                       color: bg,
-                      borderRadius: BorderRadius.circular(4),
+                      borderRadius: BorderRadius.circular(6),
                       border: isToday ? Border.all(color: kGold, width: 2) : null,
                     ),
-                    child: isToday
-                        ? const Center(child: Text('●', style: TextStyle(color: kGold, fontSize: 8)))
-                        : null,
+                    child: Center(
+                      child: Text(
+                        '${i + 1}',
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w600,
+                          color: isDone ? Colors.white.withOpacity(0.85) : kText3,
+                        ),
+                      ),
+                    ),
                   ),
                 );
               },
             ),
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: 16,
-              runSpacing: 8,
-              children: [
-                _legend(kGreen, 'Completed'),
-                _legend(const Color(0xFF7F1D1D), 'Missed'),
-                _legend(kSurface2, 'Pending'),
-                Row(mainAxisSize: MainAxisSize.min, children: [
-                  Container(
-                    width: 16, height: 16,
-                    decoration: BoxDecoration(
-                      color: kSurface2,
-                      borderRadius: BorderRadius.circular(3),
-                      border: Border.all(color: kGold, width: 2),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  const Text('Today', style: TextStyle(fontSize: 12, color: kText2)),
-                ]),
-              ],
-            ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 18),
+
+          // Legend
+          Wrap(
+            spacing: 18, runSpacing: 10,
+            children: [
+              _legend(kGreen, 'Completed'),
+              _legend(kRed.withOpacity(0.18), 'Missed'),
+              _legend(kSurfaceHi, 'Upcoming'),
+              _legendToday(),
+            ],
+          ),
+        ],
       ),
     );
   }
 
-  Widget _tStat(String v, String l, Color c) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-    decoration: BoxDecoration(color: kSurface, borderRadius: BorderRadius.circular(10)),
+  Widget _miniStat(String v, String l, Color c) => Expanded(
     child: Column(
       children: [
-        Text(v, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: c)),
-        Text(l, style: const TextStyle(fontSize: 10, color: kText3)),
+        Text(v, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: c)),
+        const SizedBox(height: 2),
+        Text(l, style: const TextStyle(fontSize: 11, color: kText3, fontWeight: FontWeight.w600)),
       ],
     ),
   );
@@ -612,226 +877,282 @@ class TrackerScreen extends StatelessWidget {
   Widget _legend(Color c, String l) => Row(
     mainAxisSize: MainAxisSize.min,
     children: [
-      Container(width: 16, height: 16, decoration: BoxDecoration(color: c, borderRadius: BorderRadius.circular(3))),
-      const SizedBox(width: 6),
+      Container(width: 14, height: 14, decoration: BoxDecoration(color: c, borderRadius: BorderRadius.circular(4))),
+      const SizedBox(width: 7),
       Text(l, style: const TextStyle(fontSize: 12, color: kText2)),
+    ],
+  );
+
+  Widget _legendToday() => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Container(
+        width: 14, height: 14,
+        decoration: BoxDecoration(
+          color: kSurfaceHi, borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: kGold, width: 2),
+        ),
+      ),
+      const SizedBox(width: 7),
+      const Text('Today', style: TextStyle(fontSize: 12, color: kText2)),
     ],
   );
 }
 
-// ── SUBJECTS SCREEN ──
-class SubjectsScreen extends StatelessWidget {
+// ════════════════════════════════════════════════════════════
+//  SUBJECTS
+// ════════════════════════════════════════════════════════════
+class SubjectsScreen extends StatefulWidget {
   final AppModel model;
   final VoidCallback onChanged;
   const SubjectsScreen({super.key, required this.model, required this.onChanged});
+  @override
+  State<SubjectsScreen> createState() => _SubjectsScreenState();
+}
 
-  static const _icons = ['⚛️', '🧪', '📐'];
-  static const _colors = [kBlue, kGreen, kGold];
+class _SubjectsScreenState extends State<SubjectsScreen> {
+  final Set<int> _expanded = {0};
 
   @override
   Widget build(BuildContext context) {
-    final subjects = model.subjects;
-    final subjectNames = subjects.keys.toList();
+    final m = widget.model;
+    final subjectNames = m.subjects.keys.toList();
 
     return SafeArea(
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
         children: [
-          Row(
-            children: List.generate(3, (i) {
-              final name = subjectNames[i];
-              final chapters = subjects[name]!;
-              final done = chapters.where((c) => c.done).length;
-              final pct = chapters.isEmpty ? 0 : (done / chapters.length * 100).round();
-              return Expanded(
-                child: Container(
-                  margin: EdgeInsets.only(right: i < 2 ? 8 : 0),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  decoration: BoxDecoration(color: kSurface, borderRadius: BorderRadius.circular(12)),
+          const Text('Syllabus',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: kText)),
+          const SizedBox(height: 4),
+          Text('${m.doneChapters} of ${m.totalChapters} chapters mastered',
+              style: const TextStyle(fontSize: 13, color: kText3)),
+          const SizedBox(height: 18),
+
+          // Three rings overview
+          Panel(
+            child: Row(
+              children: List.generate(subjectNames.length, (i) {
+                final chapters = m.subjects[subjectNames[i]]!;
+                final done = chapters.where((c) => c.done).length;
+                final p = chapters.isEmpty ? 0.0 : done / chapters.length;
+                return Expanded(
                   child: Column(
                     children: [
-                      Text('$pct%', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: _colors[i])),
-                      const SizedBox(height: 3),
-                      Text(name, style: const TextStyle(fontSize: 11, color: kText3)),
+                      ProgressRing(
+                        progress: p, size: 70, stroke: 7, color: kSubjectColors[i],
+                        child: Text('${(p * 100).round()}',
+                            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: kText)),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(subjectNames[i],
+                          style: const TextStyle(fontSize: 12, color: kText2, fontWeight: FontWeight.w600)),
                     ],
                   ),
-                ),
-              );
-            }),
+                );
+              }),
+            ),
           ),
-          const SizedBox(height: 12),
-          ...List.generate(subjectNames.length, (si) {
-            final name = subjectNames[si];
-            final chapters = subjects[name]!;
-            final done = chapters.where((c) => c.done).length;
-            final pct = chapters.isEmpty ? 0.0 : done / chapters.length;
+          const SizedBox(height: 18),
 
-            return Container(
-              margin: const EdgeInsets.only(bottom: 12),
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(color: kSurface, borderRadius: BorderRadius.circular(14)),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Text('${_icons[si]} $name',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _colors[si])),
-                      const Spacer(),
-                      Text('$done/${chapters.length}', style: const TextStyle(color: kText2, fontSize: 13)),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(99),
-                    child: LinearProgressIndicator(
-                      value: pct,
-                      backgroundColor: kSurface2,
-                      color: _colors[si],
-                      minHeight: 8,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  ...chapters.asMap().entries.map((e) {
-                    final ch = e.value;
-                    final tagColor = _tagColor(ch.priority);
-                    return GestureDetector(
-                      onTap: () { ch.done = !ch.done; onChanged(); },
-                      child: Container(
-                        margin: const EdgeInsets.only(bottom: 6),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                        decoration: BoxDecoration(color: kSurface2, borderRadius: BorderRadius.circular(10)),
-                        child: Row(
-                          children: [
-                            AnimatedContainer(
-                              duration: const Duration(milliseconds: 200),
-                              width: 20, height: 20,
-                              decoration: BoxDecoration(
-                                color: ch.done ? kGreen : Colors.transparent,
-                                border: Border.all(color: ch.done ? kGreen : kText3, width: 2),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: ch.done
-                                  ? const Icon(Icons.check, size: 13, color: Colors.white)
-                                  : null,
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(ch.name,
-                                  style: TextStyle(
-                                    fontSize: 13, color: ch.done ? kText3 : kText,
-                                    decoration: ch.done ? TextDecoration.lineThrough : null,
-                                  )),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: tagColor[0],
-                                borderRadius: BorderRadius.circular(99),
-                              ),
-                              child: Text(_tagLabel(ch.priority),
-                                  style: TextStyle(fontSize: 10, color: tagColor[1], fontWeight: FontWeight.w600)),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }),
-                  const SizedBox(height: 4),
-                  GestureDetector(
-                    onTap: () => _addChapterDialog(context, name, chapters),
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      decoration: BoxDecoration(
-                        border: Border.all(color: kText3, style: BorderStyle.solid),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Text('+ Add Chapter',
-                          textAlign: TextAlign.center, style: TextStyle(color: kText2, fontSize: 13)),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }),
+          ...List.generate(subjectNames.length, (si) => _subjectCard(si, subjectNames[si])),
         ],
       ),
     );
   }
 
-  List<Color> _tagColor(String p) {
-    switch (p) {
-      case 'high': return [const Color(0xFF7F1D1D), const Color(0xFFFCA5A5)];
-      case 'low': return [const Color(0xFF14532D), const Color(0xFF86EFAC)];
-      default: return [const Color(0xFF78350F), const Color(0xFFFCD34D)];
-    }
+  Widget _subjectCard(int si, String name) {
+    final chapters = widget.model.subjects[name]!;
+    final done = chapters.where((c) => c.done).length;
+    final pct = chapters.isEmpty ? 0.0 : done / chapters.length;
+    final color = kSubjectColors[si];
+    final isOpen = _expanded.contains(si);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      decoration: BoxDecoration(
+        color: kSurface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: kStroke),
+      ),
+      child: Column(
+        children: [
+          // Header (tap to expand)
+          GestureDetector(
+            onTap: () => setState(() => isOpen ? _expanded.remove(si) : _expanded.add(si)),
+            behavior: HitTestBehavior.opaque,
+            child: Padding(
+              padding: const EdgeInsets.all(18),
+              child: Row(
+                children: [
+                  Container(
+                    width: 44, height: 44,
+                    decoration: BoxDecoration(
+                      color: color.withOpacity(0.14),
+                      borderRadius: BorderRadius.circular(13),
+                    ),
+                    child: Icon(kSubjectIcons[si], color: color, size: 24),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(name, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: kText)),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(99),
+                                child: LinearProgressIndicator(
+                                  value: pct, minHeight: 6,
+                                  backgroundColor: kStroke,
+                                  valueColor: AlwaysStoppedAnimation(color),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Text('$done/${chapters.length}',
+                                style: const TextStyle(fontSize: 12, color: kText3, fontWeight: FontWeight.w700)),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  AnimatedRotation(
+                    turns: isOpen ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 200),
+                    child: const Icon(Icons.keyboard_arrow_down_rounded, color: kText3),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Chapter list
+          if (isOpen) ...[
+            const Divider(height: 1, color: kStroke),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+              child: Column(
+                children: [
+                  ...chapters.asMap().entries.map((e) => _chapterRow(e.value, color)),
+                  const SizedBox(height: 4),
+                  GestureDetector(
+                    onTap: () => _addChapter(context, name, chapters),
+                    behavior: HitTestBehavior.opaque,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.add_rounded, size: 18, color: color),
+                          const SizedBox(width: 6),
+                          Text('Add chapter',
+                              style: TextStyle(fontSize: 13, color: color, fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
-  String _tagLabel(String p) => p == 'high' ? 'High' : p == 'low' ? 'Low' : 'Med';
+  Widget _chapterRow(Chapter ch, Color subjColor) {
+    final pColor = ch.priority == 'high' ? kRed : ch.priority == 'low' ? kGreen : kGold;
+    return GestureDetector(
+      onTap: () { setState(() => ch.done = !ch.done); widget.onChanged(); },
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 11),
+        child: Row(
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              width: 22, height: 22,
+              decoration: BoxDecoration(
+                color: ch.done ? subjColor : Colors.transparent,
+                border: Border.all(color: ch.done ? subjColor : kText3, width: 2),
+                borderRadius: BorderRadius.circular(7),
+              ),
+              child: ch.done ? const Icon(Icons.check_rounded, size: 14, color: Colors.white) : null,
+            ),
+            const SizedBox(width: 13),
+            Expanded(
+              child: Text(ch.name,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: ch.done ? kText3 : kText,
+                    decoration: ch.done ? TextDecoration.lineThrough : null,
+                    decorationColor: kText3,
+                  )),
+            ),
+            Container(width: 7, height: 7, decoration: BoxDecoration(color: pColor, shape: BoxShape.circle)),
+          ],
+        ),
+      ),
+    );
+  }
 
-  void _addChapterDialog(BuildContext ctx, String subject, List<Chapter> chapters) {
+  void _addChapter(BuildContext ctx, String subject, List<Chapter> chapters) {
     final ctrl = TextEditingController();
     String priority = 'med';
     showModalBottomSheet(
       context: ctx,
+      isScrollControlled: true,
       backgroundColor: kSurface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (_) => StatefulBuilder(
         builder: (ctx2, setS) => Padding(
-          padding: EdgeInsets.fromLTRB(20, 20, 20, MediaQuery.of(ctx2).viewInsets.bottom + 20),
+          padding: EdgeInsets.fromLTRB(20, 20, 20, MediaQuery.of(ctx2).viewInsets.bottom + 24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Add Chapter to $subject',
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 14),
-              TextField(
-                controller: ctrl,
-                autofocus: true,
-                style: const TextStyle(color: kText),
-                decoration: const InputDecoration(hintText: 'Chapter name...', hintStyle: TextStyle(color: kText3)),
+              Center(
+                child: Container(width: 38, height: 4, decoration: BoxDecoration(color: kStroke, borderRadius: BorderRadius.circular(99))),
               ),
-              const SizedBox(height: 10),
-              SegmentedButton<String>(
-                segments: const [
-                  ButtonSegment(value: 'high', label: Text('High')),
-                  ButtonSegment(value: 'med', label: Text('Medium')),
-                  ButtonSegment(value: 'low', label: Text('Low')),
-                ],
-                selected: {priority},
-                onSelectionChanged: (s) => setS(() => priority = s.first),
-                style: ButtonStyle(
-                  backgroundColor: WidgetStateProperty.resolveWith((states) =>
-                      states.contains(WidgetState.selected) ? kAccent : kSurface2),
-                ),
-              ),
+              const SizedBox(height: 20),
+              Text('Add chapter to $subject',
+                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: kText)),
+              const SizedBox(height: 16),
+              _sheetField(ctrl, 'Chapter name'),
               const SizedBox(height: 14),
+              const Text('Priority', style: TextStyle(fontSize: 12, color: kText3, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
               Row(
                 children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text('Cancel'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: () {
-                        final name = ctrl.text.trim();
-                        if (name.isEmpty) return;
-                        chapters.add(Chapter(name: name, priority: priority));
-                        onChanged();
-                        Navigator.pop(ctx);
-                      },
-                      child: const Text('Add'),
-                    ),
-                  ),
+                  _prioChip('High', 'high', priority, kRed, (v) => setS(() => priority = v)),
+                  const SizedBox(width: 8),
+                  _prioChip('Medium', 'med', priority, kGold, (v) => setS(() => priority = v)),
+                  const SizedBox(width: 8),
+                  _prioChip('Low', 'low', priority, kGreen, (v) => setS(() => priority = v)),
                 ],
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: kAccent,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                  onPressed: () {
+                    final n = ctrl.text.trim();
+                    if (n.isEmpty) return;
+                    chapters.add(Chapter(name: n, priority: priority));
+                    widget.onChanged();
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('Add chapter', style: TextStyle(fontWeight: FontWeight.w700)),
+                ),
               ),
             ],
           ),
@@ -839,9 +1160,45 @@ class SubjectsScreen extends StatelessWidget {
       ),
     );
   }
+
+  Widget _prioChip(String label, String val, String sel, Color c, ValueChanged<String> onTap) => Expanded(
+    child: GestureDetector(
+      onTap: () => onTap(val),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 11),
+        decoration: BoxDecoration(
+          color: sel == val ? c.withOpacity(0.16) : kSurfaceHi,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: sel == val ? c : kStroke, width: 1.5),
+        ),
+        child: Center(
+          child: Text(label,
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: sel == val ? c : kText2)),
+        ),
+      ),
+    ),
+  );
 }
 
-// ── TASKS SCREEN ──
+Widget _sheetField(TextEditingController ctrl, String hint) => TextField(
+  controller: ctrl,
+  autofocus: true,
+  style: const TextStyle(color: kText, fontSize: 15),
+  cursorColor: kAccent,
+  decoration: InputDecoration(
+    hintText: hint,
+    hintStyle: const TextStyle(color: kText3),
+    filled: true,
+    fillColor: kSurfaceHi,
+    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: kStroke)),
+    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: kAccent, width: 1.5)),
+  ),
+);
+
+// ════════════════════════════════════════════════════════════
+//  FOCUS / TASKS
+// ════════════════════════════════════════════════════════════
 class TasksScreen extends StatefulWidget {
   final AppModel model;
   final VoidCallback onChanged;
@@ -858,12 +1215,8 @@ class _TasksScreenState extends State<TasksScreen> {
   Timer? _timer;
 
   static const _subNames = ['Physics', 'Chemistry', 'Maths'];
-  static const _subIcons = ['⚛️', '🧪', '📐'];
-  static const _subColors = [kBlue, kGreen, kGold];
 
   String get _today => _dateStr(DateTime.now());
-
-  List<Task> get _tasks => widget.model.dailyTasks[_today] ?? [];
   List<int> get _studyToday => widget.model.studyMinutes[_today] ?? [0, 0, 0];
 
   void _startTimer() {
@@ -872,9 +1225,9 @@ class _TasksScreenState extends State<TasksScreen> {
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       setState(() => _timerSecs++);
       if (_timerSecs % 60 == 0) {
-        final today = _dateStr(DateTime.now());
-        widget.model.studyMinutes.putIfAbsent(today, () => [0, 0, 0]);
-        widget.model.studyMinutes[today]![_selectedSub]++;
+        final t = _dateStr(DateTime.now());
+        widget.model.studyMinutes.putIfAbsent(t, () => [0, 0, 0]);
+        widget.model.studyMinutes[t]![_selectedSub]++;
         widget.onChanged();
       }
     });
@@ -902,201 +1255,239 @@ class _TasksScreenState extends State<TasksScreen> {
   Widget build(BuildContext context) {
     final tasks = widget.model.dailyTasks[_today] ?? [];
     final study = _studyToday;
+    final color = kSubjectColors[_selectedSub];
     final h = _timerSecs ~/ 3600;
     final m = (_timerSecs % 3600) ~/ 60;
     final s = _timerSecs % 60;
+    final todayTotal = study.fold(0, (a, b) => a + b);
 
     return SafeArea(
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
         children: [
-          Text(
-            _fmtDate(DateTime.now()),
-            style: const TextStyle(fontSize: 14, color: kText2, fontWeight: FontWeight.w600),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              const Expanded(
+                child: Text('Focus session',
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: kText)),
+              ),
+              Text('${todayTotal ~/ 60}h ${todayTotal % 60}m today',
+                  style: const TextStyle(fontSize: 13, color: kText3, fontWeight: FontWeight.w600)),
+            ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 18),
 
           // Subject selector
           Row(
-            children: List.generate(3, (i) => Expanded(
-              child: GestureDetector(
-                onTap: () => setState(() => _selectedSub = i),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  margin: EdgeInsets.only(right: i < 2 ? 8 : 0),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  decoration: BoxDecoration(
-                    color: _selectedSub == i ? kSurface2 : kSurface,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: _selectedSub == i ? kAccent : Colors.transparent,
-                      width: 2,
-                    ),
-                  ),
-                  child: Column(
-                    children: [
-                      Text(_subIcons[i], style: const TextStyle(fontSize: 22)),
-                      const SizedBox(height: 4),
-                      Text(_subNames[i],
-                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _subColors[i])),
-                      const SizedBox(height: 2),
-                      Text(_fmtMins(study.length > i ? study[i] : 0),
-                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: kGold)),
-                    ],
-                  ),
-                ),
-              ),
-            )),
-          ),
-          const SizedBox(height: 10),
-
-          // Timer display
-          Center(
-            child: Text(
-              '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}',
-              style: const TextStyle(
-                  fontSize: 48, fontWeight: FontWeight.w900, color: kGold,
-                  fontFeatures: [FontFeature.tabularFigures()]),
-            ),
-          ),
-          const SizedBox(height: 8),
-
-          // Timer buttons
-          Row(
-            children: [
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: _running ? null : _startTimer,
-                  icon: const Icon(Icons.play_arrow_rounded),
-                  label: const Text('Start'),
-                  style: FilledButton.styleFrom(backgroundColor: kGreen,
-                      padding: const EdgeInsets.symmetric(vertical: 14)),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: _running ? _pauseTimer : null,
-                  icon: const Icon(Icons.pause_rounded),
-                  label: const Text('Pause'),
-                  style: FilledButton.styleFrom(backgroundColor: kRed,
-                      padding: const EdgeInsets.symmetric(vertical: 14)),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: _resetTimer,
-                  icon: const Icon(Icons.refresh_rounded),
-                  label: const Text('Reset'),
-                  style: FilledButton.styleFrom(backgroundColor: kSurface2,
-                      padding: const EdgeInsets.symmetric(vertical: 14)),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-
-          // Task section
-          const Text('Today\'s Tasks', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _ctrl,
-                  style: const TextStyle(color: kText),
-                  decoration: const InputDecoration(
-                    hintText: 'Add a task...',
-                    hintStyle: TextStyle(color: kText3),
-                    contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                  ),
-                  onSubmitted: (_) => _addTask(),
-                ),
-              ),
-              const SizedBox(width: 8),
-              FilledButton(
-                onPressed: _addTask,
-                style: FilledButton.styleFrom(
-                  backgroundColor: kAccent,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  padding: const EdgeInsets.all(16),
-                ),
-                child: const Icon(Icons.add, size: 24),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-
-          if (tasks.isEmpty)
-            Container(
-              padding: const EdgeInsets.all(30),
-              child: const Column(
-                children: [
-                  Text('📝', style: TextStyle(fontSize: 36)),
-                  SizedBox(height: 8),
-                  Text('No tasks yet. Add one above!', style: TextStyle(color: kText3)),
-                ],
-              ),
-            )
-          else
-            ...tasks.asMap().entries.map((e) {
-              final t = e.value;
-              return Dismissible(
-                key: Key('task-${e.key}-${t.text}'),
-                direction: DismissDirection.endToStart,
-                onDismissed: (_) {
-                  widget.model.dailyTasks[_today]!.removeAt(e.key);
-                  widget.onChanged();
-                },
-                background: Container(
-                  alignment: Alignment.centerRight,
-                  padding: const EdgeInsets.only(right: 16),
-                  decoration: BoxDecoration(
-                    color: kRed.withOpacity(.2),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Icon(Icons.delete_rounded, color: kRed),
-                ),
+            children: List.generate(3, (i) {
+              final selected = _selectedSub == i;
+              final c = kSubjectColors[i];
+              return Expanded(
                 child: GestureDetector(
-                  onTap: () { t.done = !t.done; widget.onChanged(); },
-                  child: Container(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-                    decoration: BoxDecoration(color: kSurface, borderRadius: BorderRadius.circular(12)),
-                    child: Row(
+                  onTap: () => setState(() => _selectedSub = i),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    margin: EdgeInsets.only(right: i < 2 ? 10 : 0),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    decoration: BoxDecoration(
+                      color: selected ? c.withOpacity(0.14) : kSurface,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: selected ? c : kStroke, width: 1.5),
+                    ),
+                    child: Column(
                       children: [
-                        AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          width: 22, height: 22,
-                          decoration: BoxDecoration(
-                            color: t.done ? kGreen : Colors.transparent,
-                            border: Border.all(color: t.done ? kGreen : kText3, width: 2),
-                            borderRadius: BorderRadius.circular(7),
-                          ),
-                          child: t.done ? const Icon(Icons.check, size: 14, color: Colors.white) : null,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            t.text,
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: t.done ? kText3 : kText,
-                              decoration: t.done ? TextDecoration.lineThrough : null,
-                            ),
-                          ),
-                        ),
+                        Icon(kSubjectIcons[i], color: selected ? c : kText3, size: 24),
+                        const SizedBox(height: 7),
+                        Text(_subNames[i],
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: selected ? c : kText3)),
+                        const SizedBox(height: 3),
+                        Text('${(study.length > i ? study[i] : 0) ~/ 60}h ${(study.length > i ? study[i] : 0) % 60}m',
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: kText2)),
                       ],
                     ),
                   ),
                 ),
               );
             }),
+          ),
+          const SizedBox(height: 18),
+
+          // Timer
+          Panel(
+            padding: const EdgeInsets.symmetric(vertical: 28),
+            child: Column(
+              children: [
+                Text(
+                  '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}',
+                  style: TextStyle(
+                    fontSize: 52, fontWeight: FontWeight.w800, color: color,
+                    fontFeatures: const [FontFeature.tabularFigures()], letterSpacing: 1),
+                ),
+                const SizedBox(height: 6),
+                Text(_running ? 'Recording ${_subNames[_selectedSub]}…' : 'Paused',
+                    style: const TextStyle(fontSize: 13, color: kText3, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 22),
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 2,
+                      child: GestureDetector(
+                        onTap: _running ? _pauseTimer : _startTimer,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 15),
+                          decoration: BoxDecoration(
+                            color: _running ? kSurfaceHi : color,
+                            borderRadius: BorderRadius.circular(14),
+                            border: _running ? Border.all(color: kStroke) : null,
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(_running ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                  color: _running ? kText : Colors.white, size: 22),
+                              const SizedBox(width: 6),
+                              Text(_running ? 'Pause' : 'Start',
+                                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _running ? kText : Colors.white)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: _resetTimer,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 15),
+                          decoration: BoxDecoration(
+                            color: kSurfaceHi,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: kStroke),
+                          ),
+                          child: const Icon(Icons.refresh_rounded, color: kText2, size: 22),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // Tasks
+          Row(
+            children: [
+              sectionLabel('Today\'s tasks'),
+              const Spacer(),
+              if (tasks.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10, right: 4),
+                  child: Text('${tasks.where((t) => t.done).length}/${tasks.length}',
+                      style: const TextStyle(fontSize: 12, color: kText3, fontWeight: FontWeight.w700)),
+                ),
+            ],
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _ctrl,
+                  style: const TextStyle(color: kText, fontSize: 15),
+                  cursorColor: kAccent,
+                  decoration: InputDecoration(
+                    hintText: 'Add a task…',
+                    hintStyle: const TextStyle(color: kText3),
+                    filled: true, fillColor: kSurface,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: kStroke)),
+                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: kAccent, width: 1.5)),
+                  ),
+                  onSubmitted: (_) => _addTask(),
+                ),
+              ),
+              const SizedBox(width: 10),
+              GestureDetector(
+                onTap: _addTask,
+                child: Container(
+                  padding: const EdgeInsets.all(15),
+                  decoration: BoxDecoration(color: kAccent, borderRadius: BorderRadius.circular(14)),
+                  child: const Icon(Icons.add_rounded, color: Colors.white, size: 24),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+
+          if (tasks.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 30),
+              child: Column(
+                children: [
+                  Icon(Icons.checklist_rounded, size: 40, color: kText3.withOpacity(0.5)),
+                  const SizedBox(height: 10),
+                  const Text('No tasks yet', style: TextStyle(color: kText3, fontSize: 14)),
+                ],
+              ),
+            )
+          else
+            ...tasks.asMap().entries.map((e) => _taskRow(e.key, e.value)),
         ],
       ),
     );
   }
+
+  Widget _taskRow(int idx, Task t) => Dismissible(
+    key: Key('task-$idx-${t.text}'),
+    direction: DismissDirection.endToStart,
+    onDismissed: (_) {
+      widget.model.dailyTasks[_today]!.removeAt(idx);
+      widget.onChanged();
+    },
+    background: Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      alignment: Alignment.centerRight,
+      padding: const EdgeInsets.only(right: 20),
+      decoration: BoxDecoration(color: kRed.withOpacity(0.15), borderRadius: BorderRadius.circular(14)),
+      child: const Icon(Icons.delete_outline_rounded, color: kRed),
+    ),
+    child: GestureDetector(
+      onTap: () { setState(() => t.done = !t.done); widget.onChanged(); },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+        decoration: BoxDecoration(
+          color: kSurface, borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: kStroke),
+        ),
+        child: Row(
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              width: 22, height: 22,
+              decoration: BoxDecoration(
+                color: t.done ? kGreen : Colors.transparent,
+                border: Border.all(color: t.done ? kGreen : kText3, width: 2),
+                borderRadius: BorderRadius.circular(7),
+              ),
+              child: t.done ? const Icon(Icons.check_rounded, size: 14, color: Colors.white) : null,
+            ),
+            const SizedBox(width: 13),
+            Expanded(
+              child: Text(t.text,
+                  style: TextStyle(
+                    fontSize: 15,
+                    color: t.done ? kText3 : kText,
+                    decoration: t.done ? TextDecoration.lineThrough : null,
+                    decorationColor: kText3,
+                  )),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 
   void _addTask() {
     final text = _ctrl.text.trim();
@@ -1106,18 +1497,11 @@ class _TasksScreenState extends State<TasksScreen> {
     _ctrl.clear();
     widget.onChanged();
   }
-
-  String _fmtDate(DateTime d) {
-    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    const months = ['', 'January', 'February', 'March', 'April', 'May', 'June',
-        'July', 'August', 'September', 'October', 'November', 'December'];
-    return '${days[d.weekday - 1]}, ${d.day} ${months[d.month]} ${d.year}';
-  }
-
-  String _fmtMins(int m) => '${m ~/ 60}h ${m % 60}m';
 }
 
-// ── SETTINGS SCREEN ──
+// ════════════════════════════════════════════════════════════
+//  SETTINGS
+// ════════════════════════════════════════════════════════════
 class SettingsScreen extends StatefulWidget {
   final AppModel model;
   final VoidCallback onChanged;
@@ -1152,130 +1536,160 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     return SafeArea(
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
         children: [
-          const Text('Settings', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 16),
-          _card('Challenge Setup', [
-            _field('Your Name', _nameCtrl),
-            _datePicker('Start Date', _startDate, (d) => setState(() => _startDate = d)),
-            _datePicker('JEE Target Date', _targetDate, (d) => setState(() => _targetDate = d)),
-          ]),
-          const SizedBox(height: 4),
-          FilledButton(
-            onPressed: () {
-              m.name = _nameCtrl.text.trim().isEmpty ? 'JEE Aspirant' : _nameCtrl.text.trim();
-              m.startDate = _dateStr(_startDate);
-              m.targetDate = _dateStr(_targetDate);
-              widget.onChanged();
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Settings saved!'), backgroundColor: kGreen),
-              );
-            },
-            style: FilledButton.styleFrom(
-              backgroundColor: kAccent,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          const Text('Settings',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: kText)),
+          const SizedBox(height: 18),
+
+          sectionLabel('Challenge setup'),
+          Panel(
+            child: Column(
+              children: [
+                _fieldRow('Your name', TextField(
+                  controller: _nameCtrl,
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(color: kText, fontWeight: FontWeight.w600),
+                  cursorColor: kAccent,
+                  decoration: const InputDecoration(
+                    border: InputBorder.none, isDense: true,
+                    hintText: 'Name', hintStyle: TextStyle(color: kText3),
+                  ),
+                )),
+                const Divider(height: 24, color: kStroke),
+                _dateRow('Start date', _startDate, (d) => setState(() => _startDate = d)),
+                const Divider(height: 24, color: kStroke),
+                _dateRow('JEE target date', _targetDate, (d) => setState(() => _targetDate = d)),
+              ],
             ),
-            child: const Text('Save Settings', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
           ),
-          const SizedBox(height: 16),
-          _card('Your Stats', [
-            _statRow('Days Completed', '${m.totalDone}', kGreen),
-            _statRow('Current Streak', '${m.streak} days', kGold),
-            _statRow('Total Study Hours', '${totalMins ~/ 60}h ${totalMins % 60}m', kAccent),
-            _statRow('Challenge Progress', '${(m.totalDone / 180 * 100).round()}%', kBlue),
-            _statRow('App Version', '1.0.0', kText3),
-          ]),
           const SizedBox(height: 12),
-          OutlinedButton(
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: () {
+                m.name = _nameCtrl.text.trim().isEmpty ? 'JEE Aspirant' : _nameCtrl.text.trim();
+                m.startDate = _dateStr(_startDate);
+                m.targetDate = _dateStr(_targetDate);
+                widget.onChanged();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: const Text('Settings saved'),
+                    backgroundColor: kGreen,
+                    behavior: SnackBarBehavior.floating,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                );
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: kAccent,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              ),
+              child: const Text('Save settings', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          sectionLabel('Your stats'),
+          Panel(
+            child: Column(
+              children: [
+                _statRow(Icons.task_alt_rounded, kGreen, 'Days completed', '${m.totalDone}'),
+                const Divider(height: 22, color: kStroke),
+                _statRow(Icons.local_fire_department_rounded, kAccent, 'Current streak', '${m.streak} days'),
+                const Divider(height: 22, color: kStroke),
+                _statRow(Icons.schedule_rounded, kBlue, 'Total study time', '${totalMins ~/ 60}h ${totalMins % 60}m'),
+                const Divider(height: 22, color: kStroke),
+                _statRow(Icons.menu_book_rounded, kViolet, 'Chapters done', '${m.doneChapters}/${m.totalChapters}'),
+                const Divider(height: 22, color: kStroke),
+                _statRow(Icons.trending_up_rounded, kGold, 'Overall progress', '${(m.totalDone / 180 * 100).round()}%'),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          OutlinedButton.icon(
             onPressed: () => _confirmReset(context),
+            icon: const Icon(Icons.delete_outline_rounded, size: 20),
+            label: const Text('Reset all data', style: TextStyle(fontWeight: FontWeight.w700)),
             style: OutlinedButton.styleFrom(
               foregroundColor: kRed,
-              side: const BorderSide(color: kRed),
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              side: const BorderSide(color: kRed, width: 1),
+              padding: const EdgeInsets.symmetric(vertical: 15),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             ),
-            child: const Text('⚠  Reset All Data', style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+          const SizedBox(height: 16),
+          const Center(
+            child: Text('180 Days · JEE 2027  ·  v1.1',
+                style: TextStyle(fontSize: 12, color: kText3)),
           ),
         ],
       ),
     );
   }
 
-  Widget _card(String title, List<Widget> children) => Container(
-    margin: const EdgeInsets.only(bottom: 12),
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(color: kSurface, borderRadius: BorderRadius.circular(14)),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
-            color: kText3, letterSpacing: 1)),
-        const SizedBox(height: 12),
-        ...children,
-      ],
-    ),
+  Widget _fieldRow(String label, Widget field) => Row(
+    children: [
+      Text(label, style: const TextStyle(fontSize: 15, color: kText2)),
+      const Spacer(),
+      SizedBox(width: 170, child: field),
+    ],
   );
 
-  Widget _field(String label, TextEditingController ctrl) => Padding(
-    padding: const EdgeInsets.only(bottom: 12),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: const TextStyle(fontSize: 12, color: kText2)),
-        const SizedBox(height: 6),
-        TextField(controller: ctrl, style: const TextStyle(color: kText),
-            decoration: InputDecoration(hintStyle: const TextStyle(color: kText3),
-                hintText: label)),
-      ],
-    ),
-  );
-
-  Widget _datePicker(String label, DateTime value, ValueChanged<DateTime> onPick) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        children: [
-          Expanded(child: Text(label, style: const TextStyle(fontSize: 14, color: kText))),
-          TextButton(
-            onPressed: () async {
-              final d = await showDatePicker(
-                context: context,
-                initialDate: value,
-                firstDate: DateTime(2024),
-                lastDate: DateTime(2030),
-                builder: (ctx, child) => Theme(
-                  data: Theme.of(ctx).copyWith(
-                    colorScheme: const ColorScheme.dark(primary: kAccent, surface: kSurface),
-                  ),
-                  child: child!,
-                ),
-              );
-              if (d != null) onPick(d);
-            },
-            child: Text(_fmtDate(value),
-                style: const TextStyle(color: kAccent, fontWeight: FontWeight.w600)),
+  Widget _dateRow(String label, DateTime value, ValueChanged<DateTime> onPick) => Row(
+    children: [
+      Text(label, style: const TextStyle(fontSize: 15, color: kText2)),
+      const Spacer(),
+      GestureDetector(
+        onTap: () async {
+          final d = await showDatePicker(
+            context: context,
+            initialDate: value,
+            firstDate: DateTime(2024),
+            lastDate: DateTime(2030),
+            builder: (ctx, child) => Theme(
+              data: Theme.of(ctx).copyWith(
+                colorScheme: const ColorScheme.dark(primary: kAccent, surface: kSurface, onSurface: kText),
+                dialogBackgroundColor: kSurface,
+              ),
+              child: child!,
+            ),
+          );
+          if (d != null) onPick(d);
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(color: kSurfaceHi, borderRadius: BorderRadius.circular(10), border: Border.all(color: kStroke)),
+          child: Row(
+            children: [
+              const Icon(Icons.calendar_today_rounded, size: 14, color: kAccent),
+              const SizedBox(width: 7),
+              Text(_fmtDate(value), style: const TextStyle(color: kText, fontWeight: FontWeight.w600, fontSize: 14)),
+            ],
           ),
-        ],
+        ),
       ),
-    );
-  }
+    ],
+  );
 
-  Widget _statRow(String label, String value, Color c) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 8),
-    child: Row(
-      children: [
-        Text(label, style: const TextStyle(fontSize: 14, color: kText)),
-        const Spacer(),
-        Text(value, style: TextStyle(fontSize: 14, color: c, fontWeight: FontWeight.w700)),
-      ],
-    ),
+  Widget _statRow(IconData icon, Color c, String label, String value) => Row(
+    children: [
+      Container(
+        width: 36, height: 36,
+        decoration: BoxDecoration(color: c.withOpacity(0.14), borderRadius: BorderRadius.circular(10)),
+        child: Icon(icon, color: c, size: 19),
+      ),
+      const SizedBox(width: 13),
+      Text(label, style: const TextStyle(fontSize: 14, color: kText)),
+      const Spacer(),
+      Text(value, style: TextStyle(fontSize: 15, color: c, fontWeight: FontWeight.w800)),
+    ],
   );
 
   String _fmtDate(DateTime d) {
-    const months = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const months = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     return '${d.day} ${months[d.month]} ${d.year}';
   }
 
@@ -1284,11 +1698,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: ctx,
       builder: (_) => AlertDialog(
         backgroundColor: kSurface,
-        title: const Text('Reset All Data?'),
-        content: const Text('This will delete all your progress. This cannot be undone.',
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Reset all data?', style: TextStyle(color: kText, fontWeight: FontWeight.w700)),
+        content: const Text('This deletes all your progress, tasks and study time. This cannot be undone.',
             style: TextStyle(color: kText2)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel', style: TextStyle(color: kText2))),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: kRed),
             onPressed: () {
@@ -1296,16 +1712,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
               m.completedDays.clear();
               m.dailyTasks.clear();
               m.studyMinutes.clear();
-              m.subjects.forEach((_, chapters) {
+              for (final chapters in m.subjects.values) {
                 for (final c in chapters) c.done = false;
-              });
+              }
               widget.onChanged();
               Navigator.pop(ctx);
-              ScaffoldMessenger.of(ctx).showSnackBar(
-                const SnackBar(content: Text('All data reset.'), backgroundColor: kRed),
-              );
             },
-            child: const Text('Reset Everything'),
+            child: const Text('Reset', style: TextStyle(fontWeight: FontWeight.w700)),
           ),
         ],
       ),
@@ -1313,6 +1726,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
-// ── UTILITIES ──
+// ════════════════════════════════════════════════════════════
+//  UTIL
+// ════════════════════════════════════════════════════════════
 String _dateStr(DateTime d) =>
     '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
