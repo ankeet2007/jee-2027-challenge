@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'firebase_options.dart';
 import 'dart:convert';
 import 'dart:async';
 import 'dart:math' as math;
@@ -8,6 +12,7 @@ import 'dart:ui' show FontFeature;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light,
@@ -237,33 +242,72 @@ class AppModel {
   }
 
   Future<void> save() async {
+    final json = toJson();
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('jee_data', jsonEncode(toJson()));
+    await prefs.setString('jee_data', jsonEncode(json));
+    // Mirror to the cloud so every signed-in device stays in sync.
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      try {
+        await FirebaseFirestore.instance.collection('users').doc(uid).set({
+          'data': json,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      } catch (_) {
+        // Offline or transient error — Firestore queues the write and syncs later.
+      }
+    }
   }
+}
+
+// ════════════════════════════════════════════════════════════
+//  CLOUD SYNC
+// ════════════════════════════════════════════════════════════
+class SyncService {
+  static final _auth = FirebaseAuth.instance;
+  static final _db = FirebaseFirestore.instance;
+
+  static DocumentReference<Map<String, dynamic>> _doc(String uid) =>
+      _db.collection('users').doc(uid);
+
+  /// Loads the model for a signed-in user. Once a cloud copy exists it is the
+  /// source of truth; otherwise we seed the cloud from this device's local data.
+  static Future<AppModel> loadForUser(String uid) async {
+    try {
+      final snap = await _doc(uid).get();
+      final data = snap.data();
+      if (snap.exists && data != null && data['data'] != null) {
+        final model = AppModel.fromJson(Map<String, dynamic>.from(data['data']));
+        await model.save(); // refresh local cache
+        return model;
+      }
+    } catch (_) {
+      // Offline / error — fall back to the local cache.
+      return AppModel.load();
+    }
+    // No cloud copy yet — seed it from whatever is stored on this device.
+    final local = await AppModel.load();
+    await local.save();
+    return local;
+  }
+
+  /// Live updates pushed from other devices (ignores this device's own writes).
+  static Stream<AppModel> watch(String uid) => _doc(uid)
+      .snapshots()
+      .where((s) =>
+          !s.metadata.hasPendingWrites &&
+          s.exists &&
+          s.data()?['data'] != null)
+      .map((s) => AppModel.fromJson(Map<String, dynamic>.from(s.data()!['data'])));
+
+  static Future<void> signOut() => _auth.signOut();
 }
 
 // ════════════════════════════════════════════════════════════
 //  APP ROOT
 // ════════════════════════════════════════════════════════════
-class JEEApp extends StatefulWidget {
+class JEEApp extends StatelessWidget {
   const JEEApp({super.key});
-  @override
-  State<JEEApp> createState() => _JEEAppState();
-}
-
-class _JEEAppState extends State<JEEApp> {
-  AppModel? _model;
-
-  @override
-  void initState() {
-    super.initState();
-    AppModel.load().then((m) => setState(() => _model = m));
-  }
-
-  void _onChanged() {
-    _model!.save();
-    setState(() {});
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -283,10 +327,318 @@ class _JEEAppState extends State<JEEApp> {
         splashColor: kAccent.withOpacity(0.06),
         highlightColor: Colors.transparent,
       ),
-      home: _model == null
-          ? const Scaffold(
-              body: Center(child: CircularProgressIndicator(color: kAccent, strokeWidth: 2)))
-          : MainScreen(model: _model!, onChanged: _onChanged),
+      home: const AuthGate(),
+    );
+  }
+}
+
+/// Shows the sign-in screen until the user is authenticated, then the app.
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const _LoadingScaffold();
+        }
+        final user = snap.data;
+        if (user == null) return const AuthScreen();
+        return SyncedRoot(uid: user.uid);
+      },
+    );
+  }
+}
+
+class _LoadingScaffold extends StatelessWidget {
+  const _LoadingScaffold();
+  @override
+  Widget build(BuildContext context) => const Scaffold(
+        body: Center(child: CircularProgressIndicator(color: kAccent, strokeWidth: 2)),
+      );
+}
+
+/// Loads the signed-in user's data from the cloud and keeps it live-synced.
+class SyncedRoot extends StatefulWidget {
+  final String uid;
+  const SyncedRoot({super.key, required this.uid});
+  @override
+  State<SyncedRoot> createState() => _SyncedRootState();
+}
+
+class _SyncedRootState extends State<SyncedRoot> {
+  AppModel? _model;
+  StreamSubscription<AppModel>? _sub;
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  Future<void> _init() async {
+    final model = await SyncService.loadForUser(widget.uid);
+    if (!mounted) return;
+    setState(() => _model = model);
+    // Mirror changes made on other devices in real time.
+    _sub = SyncService.watch(widget.uid).listen((remote) {
+      if (!mounted) return;
+      setState(() => _model = remote);
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  void _onChanged() {
+    _model!.save();
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_model == null) return const _LoadingScaffold();
+    return MainScreen(model: _model!, onChanged: _onChanged);
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+//  AUTH SCREEN  (sign in / sign up — same account syncs every device)
+// ════════════════════════════════════════════════════════════
+class AuthScreen extends StatefulWidget {
+  const AuthScreen({super.key});
+  @override
+  State<AuthScreen> createState() => _AuthScreenState();
+}
+
+class _AuthScreenState extends State<AuthScreen> {
+  final _emailCtrl = TextEditingController();
+  final _passCtrl = TextEditingController();
+  bool _isSignUp = false;
+  bool _busy = false;
+  bool _obscure = true;
+  String? _error;
+
+  @override
+  void dispose() {
+    _emailCtrl.dispose();
+    _passCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final email = _emailCtrl.text.trim();
+    final pass = _passCtrl.text;
+    if (email.isEmpty || pass.isEmpty) {
+      setState(() => _error = 'Enter your email and password.');
+      return;
+    }
+    if (pass.length < 6) {
+      setState(() => _error = 'Password must be at least 6 characters.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final auth = FirebaseAuth.instance;
+      if (_isSignUp) {
+        await auth.createUserWithEmailAndPassword(email: email, password: pass);
+      } else {
+        await auth.signInWithEmailAndPassword(email: email, password: pass);
+      }
+      // AuthGate reacts to the auth state change and shows the app.
+    } on FirebaseAuthException catch (e) {
+      setState(() => _error = _friendlyError(e.code));
+    } catch (_) {
+      setState(() => _error = 'Something went wrong. Check your connection.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  String _friendlyError(String code) {
+    switch (code) {
+      case 'invalid-email':
+        return 'That email address looks invalid.';
+      case 'user-not-found':
+      case 'wrong-password':
+      case 'invalid-credential':
+        return 'Wrong email or password.';
+      case 'email-already-in-use':
+        return 'An account with this email already exists. Sign in instead.';
+      case 'weak-password':
+        return 'Choose a stronger password (6+ characters).';
+      case 'network-request-failed':
+        return 'No internet connection.';
+      default:
+        return 'Could not continue. Please try again.';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    width: 64,
+                    height: 64,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: kAccentDim,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: const Icon(Icons.bolt_rounded, color: kAccent, size: 34),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text('180 Days · JEE 2027',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: kText)),
+                  const SizedBox(height: 6),
+                  Text(
+                    _isSignUp
+                        ? 'Create an account to sync your progress across devices.'
+                        : 'Sign in to sync your progress across devices.',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 13.5, color: kText2, height: 1.4),
+                  ),
+                  const SizedBox(height: 28),
+                  Panel(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _input(
+                          controller: _emailCtrl,
+                          hint: 'Email',
+                          icon: Icons.mail_outline_rounded,
+                          keyboardType: TextInputType.emailAddress,
+                        ),
+                        const SizedBox(height: 12),
+                        _input(
+                          controller: _passCtrl,
+                          hint: 'Password',
+                          icon: Icons.lock_outline_rounded,
+                          obscure: _obscure,
+                          onSubmitted: (_) => _busy ? null : _submit(),
+                          suffix: IconButton(
+                            icon: Icon(
+                              _obscure ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                              color: kText3, size: 20,
+                            ),
+                            onPressed: () => setState(() => _obscure = !_obscure),
+                          ),
+                        ),
+                        if (_error != null) ...[
+                          const SizedBox(height: 12),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(Icons.error_outline_rounded, color: kRed, size: 17),
+                              const SizedBox(width: 7),
+                              Expanded(
+                                child: Text(_error!,
+                                    style: const TextStyle(color: kRed, fontSize: 13)),
+                              ),
+                            ],
+                          ),
+                        ],
+                        const SizedBox(height: 18),
+                        FilledButton(
+                          onPressed: _busy ? null : _submit,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: kAccent,
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                          ),
+                          child: _busy
+                              ? const SizedBox(
+                                  width: 20, height: 20,
+                                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                              : Text(_isSignUp ? 'Create account' : 'Sign in',
+                                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  TextButton(
+                    onPressed: _busy
+                        ? null
+                        : () => setState(() {
+                              _isSignUp = !_isSignUp;
+                              _error = null;
+                            }),
+                    child: Text.rich(
+                      TextSpan(
+                        text: _isSignUp ? 'Already have an account?  ' : "Don't have an account?  ",
+                        style: const TextStyle(color: kText2, fontSize: 13.5),
+                        children: [
+                          TextSpan(
+                            text: _isSignUp ? 'Sign in' : 'Sign up',
+                            style: const TextStyle(color: kAccent, fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _input({
+    required TextEditingController controller,
+    required String hint,
+    required IconData icon,
+    bool obscure = false,
+    Widget? suffix,
+    TextInputType? keyboardType,
+    ValueChanged<String>? onSubmitted,
+  }) {
+    return TextField(
+      controller: controller,
+      obscureText: obscure,
+      keyboardType: keyboardType,
+      onSubmitted: onSubmitted,
+      style: const TextStyle(color: kText, fontWeight: FontWeight.w600),
+      cursorColor: kAccent,
+      decoration: InputDecoration(
+        hintText: hint,
+        hintStyle: const TextStyle(color: kText3),
+        prefixIcon: Icon(icon, color: kText3, size: 20),
+        suffixIcon: suffix,
+        filled: true,
+        fillColor: kSurfaceHi,
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(vertical: 15),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: kStroke),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: kAccent, width: 1.4),
+        ),
+      ),
     );
   }
 }
@@ -1665,6 +2017,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 24),
 
+          sectionLabel('Account'),
+          Panel(
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 36, height: 36,
+                      decoration: BoxDecoration(
+                        color: kBlue.withOpacity(0.14),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.cloud_done_rounded, color: kBlue, size: 19),
+                    ),
+                    const SizedBox(width: 13),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Synced', style: TextStyle(fontSize: 14, color: kText)),
+                          const SizedBox(height: 2),
+                          Text(
+                            FirebaseAuth.instance.currentUser?.email ?? '',
+                            style: const TextStyle(fontSize: 12.5, color: kText2),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const Divider(height: 24, color: kStroke),
+                SizedBox(
+                  width: double.infinity,
+                  child: TextButton.icon(
+                    onPressed: () => _confirmSignOut(context),
+                    icon: const Icon(Icons.logout_rounded, size: 19, color: kText2),
+                    label: const Text('Sign out',
+                        style: TextStyle(color: kText2, fontWeight: FontWeight.w700)),
+                    style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 8)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+
           OutlinedButton.icon(
             onPressed: () => _confirmReset(context),
             icon: const Icon(Icons.delete_outline_rounded, size: 20),
@@ -1747,6 +2146,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _fmtDate(DateTime d) {
     const months = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     return '${d.day} ${months[d.month]} ${d.year}';
+  }
+
+  void _confirmSignOut(BuildContext ctx) {
+    showDialog(
+      context: ctx,
+      builder: (_) => AlertDialog(
+        backgroundColor: kSurface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Sign out?', style: TextStyle(color: kText, fontWeight: FontWeight.w700)),
+        content: const Text(
+            'Your data stays safe in the cloud. Sign back in on any device to access it.',
+            style: TextStyle(color: kText2)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel', style: TextStyle(color: kText2))),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: kAccent),
+            onPressed: () {
+              Navigator.pop(ctx);
+              SyncService.signOut();
+            },
+            child: const Text('Sign out', style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
   }
 
   void _confirmReset(BuildContext ctx) {

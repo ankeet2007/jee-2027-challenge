@@ -12,6 +12,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up Java 17 (required by Firebase Android SDK)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -29,6 +35,12 @@ jobs:
         run: |
           sed -i 's/android:label="jee_challenge"/android:label="JEE 2027 Challenge"/' \
             android/app/src/main/AndroidManifest.xml
+
+      - name: Raise minSdk to 23 (required by Firebase)
+        run: |
+          # The Android project is generated fresh above; Firebase needs API 23+.
+          find android/app -name 'build.gradle*' -print0 | xargs -0 \
+            sed -i -E 's/(minSdk(Version)?[[:space:]]*=?[[:space:]]*)flutter\.minSdkVersion/\1 23/g'
 
       - name: Install dependencies
         run: flutter pub get
