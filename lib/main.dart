@@ -230,6 +230,19 @@ class AppModel {
     );
   }
 
+  /// Overwrites every field from a decoded JSON map (used by Restore / sync).
+  void applyJson(Map<String, dynamic> j) {
+    final m = AppModel.fromJson(j);
+    name = m.name;
+    startDate = m.startDate;
+    targetDate = m.targetDate;
+    completedDays = m.completedDays;
+    dailyTasks = m.dailyTasks;
+    studyMinutes = m.studyMinutes;
+    subjects = m.subjects;
+    monthlyPlans = m.monthlyPlans;
+  }
+
   static Future<AppModel> load() async {
     final prefs = await SharedPreferences.getInstance();
     final s = prefs.getString('jee_data');
@@ -2017,6 +2030,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 24),
 
+          sectionLabel('Backup & restore'),
+          Panel(
+            child: Column(
+              children: [
+                _actionRow(
+                  Icons.ios_share_rounded, kBlue, 'Export data',
+                  'Copy a backup of everything to the clipboard',
+                  () => _exportData(context),
+                ),
+                const Divider(height: 24, color: kStroke),
+                _actionRow(
+                  Icons.download_rounded, kGreen, 'Restore data',
+                  'Paste a backup to replace your current data',
+                  () => _importData(context),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+
           sectionLabel('Account'),
           Panel(
             child: Column(
@@ -2146,6 +2179,126 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _fmtDate(DateTime d) {
     const months = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     return '${d.day} ${months[d.month]} ${d.year}';
+  }
+
+  Widget _actionRow(IconData icon, Color c, String title, String sub, VoidCallback onTap) =>
+      GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Row(
+          children: [
+            Container(
+              width: 36, height: 36,
+              decoration: BoxDecoration(color: c.withOpacity(0.14), borderRadius: BorderRadius.circular(10)),
+              child: Icon(icon, color: c, size: 19),
+            ),
+            const SizedBox(width: 13),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: const TextStyle(fontSize: 14, color: kText, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  Text(sub, style: const TextStyle(fontSize: 12, color: kText2)),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded, color: kText3, size: 22),
+          ],
+        ),
+      );
+
+  void _exportData(BuildContext ctx) {
+    final data = jsonEncode(widget.model.toJson());
+    Clipboard.setData(ClipboardData(text: data));
+    ScaffoldMessenger.of(ctx).showSnackBar(
+      SnackBar(
+        content: const Text('Backup copied to clipboard'),
+        backgroundColor: kGreen,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
+
+  void _importData(BuildContext ctx) {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: ctx,
+      builder: (_) => AlertDialog(
+        backgroundColor: kSurface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Restore data', style: TextStyle(color: kText, fontWeight: FontWeight.w700)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Paste a backup below. This replaces all your current data on this account.',
+                style: TextStyle(color: kText2, fontSize: 13)),
+            const SizedBox(height: 14),
+            TextField(
+              controller: ctrl,
+              maxLines: 6,
+              style: const TextStyle(color: kText, fontSize: 12),
+              cursorColor: kAccent,
+              decoration: InputDecoration(
+                hintText: 'Paste backup here…',
+                hintStyle: const TextStyle(color: kText3),
+                filled: true,
+                fillColor: kSurfaceHi,
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: kStroke),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: kAccent, width: 1.4),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel', style: TextStyle(color: kText2))),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: kGreen),
+            onPressed: () {
+              try {
+                final parsed = jsonDecode(ctrl.text.trim()) as Map<String, dynamic>;
+                widget.model.applyJson(parsed);
+                widget.onChanged();
+                Navigator.pop(ctx);
+                setState(() {
+                  _nameCtrl.text = widget.model.name;
+                  _startDate = DateTime.parse(widget.model.startDate);
+                  _targetDate = DateTime.parse(widget.model.targetDate);
+                });
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  SnackBar(
+                    content: const Text('Data restored'),
+                    backgroundColor: kGreen,
+                    behavior: SnackBarBehavior.floating,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                );
+              } catch (_) {
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  SnackBar(
+                    content: const Text("That doesn't look like a valid backup"),
+                    backgroundColor: kRed,
+                    behavior: SnackBarBehavior.floating,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                );
+              }
+            },
+            child: const Text('Restore', style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
   }
 
   void _confirmSignOut(BuildContext ctx) {
