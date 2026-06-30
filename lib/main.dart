@@ -25,11 +25,14 @@ void main() async {
 // ════════════════════════════════════════════════════════════
 //  DESIGN SYSTEM
 // ════════════════════════════════════════════════════════════
+const kVersion = '1.4.0';
+
 const kBg = Color(0xFF0A0B0F);
 const kSurface = Color(0xFF141821);
 const kSurfaceHi = Color(0xFF1C212C);
 const kStroke = Color(0xFF262C38);
 const kAccent = Color(0xFFFF6B4A); // warm coral
+const kAccent2 = Color(0xFFFF8A5B);
 const kAccentDim = Color(0xFF3A2420);
 const kGold = Color(0xFFFFB02E);
 const kGreen = Color(0xFF2DD4A7);
@@ -39,6 +42,12 @@ const kViolet = Color(0xFFA78BFA);
 const kText = Color(0xFFF1F4F9);
 const kText2 = Color(0xFF99A2B2);
 const kText3 = Color(0xFF5A6478);
+
+const kAccentGradient = LinearGradient(
+  colors: [kAccent, kAccent2],
+  begin: Alignment.topLeft,
+  end: Alignment.bottomRight,
+);
 
 // Subject identity colors
 const kPhysics = Color(0xFF4F9DFF);
@@ -101,7 +110,7 @@ const List<List<String>> kQuotes = [
 ];
 
 // ════════════════════════════════════════════════════════════
-//  DATA MODEL  (unchanged — preserves saved progress)
+//  DATA MODEL  (JSON shape unchanged — preserves saved progress + sync)
 // ════════════════════════════════════════════════════════════
 class Chapter {
   String name;
@@ -165,24 +174,44 @@ class AppModel {
   int get currentDayIndex {
     final now = DateTime.now();
     final start = DateTime.parse(startDate);
-    return now.difference(DateTime(start.year, start.month, start.day)).inDays;
+    return DateTime(now.year, now.month, now.day)
+        .difference(DateTime(start.year, start.month, start.day))
+        .inDays;
   }
 
   int get totalDone => completedDays.length;
 
+  /// Current run of consecutive logged days. If today isn't logged yet we
+  /// start counting from yesterday, so an active streak isn't shown as 0
+  /// until the user checks in for the day.
   int get streak {
     int s = 0;
     DateTime d = DateTime.now();
-    while (true) {
-      final k = _dateStr(d);
-      if (completedDays.contains(k)) {
-        s++;
-        d = d.subtract(const Duration(days: 1));
-      } else {
-        break;
-      }
+    if (!completedDays.contains(_dateStr(d))) {
+      d = d.subtract(const Duration(days: 1));
+    }
+    while (completedDays.contains(_dateStr(d))) {
+      s++;
+      d = d.subtract(const Duration(days: 1));
     }
     return s;
+  }
+
+  /// Longest run of consecutive logged days ever achieved.
+  int get bestStreak {
+    if (completedDays.isEmpty) return 0;
+    final days = completedDays.map(DateTime.parse).toList()..sort();
+    int best = 1, cur = 1;
+    for (int i = 1; i < days.length; i++) {
+      final gap = days[i].difference(days[i - 1]).inDays;
+      if (gap == 1) {
+        cur++;
+        if (cur > best) best = cur;
+      } else if (gap > 1) {
+        cur = 1;
+      }
+    }
+    return best;
   }
 
   int get totalStudyMins =>
@@ -252,6 +281,13 @@ class AppModel {
     } catch (_) {
       return AppModel();
     }
+  }
+
+  /// Writes only to the on-device cache. Used when applying a remote update so
+  /// we refresh the offline copy without echoing a write back to the cloud.
+  Future<void> saveLocalOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('jee_data', jsonEncode(toJson()));
   }
 
   Future<void> save() async {
@@ -384,6 +420,9 @@ class SyncedRoot extends StatefulWidget {
 class _SyncedRootState extends State<SyncedRoot> {
   AppModel? _model;
   StreamSubscription<AppModel>? _sub;
+  // Bumped only when the model is wholesale-replaced (remote sync / restore /
+  // reset) so controller-caching screens rebuild from the fresh data.
+  int _rev = 0;
 
   @override
   void initState() {
@@ -398,7 +437,11 @@ class _SyncedRootState extends State<SyncedRoot> {
     // Mirror changes made on other devices in real time.
     _sub = SyncService.watch(widget.uid).listen((remote) {
       if (!mounted) return;
-      setState(() => _model = remote);
+      remote.saveLocalOnly(); // keep the offline cache fresh (no cloud echo)
+      setState(() {
+        _model = remote;
+        _rev++;
+      });
     });
   }
 
@@ -408,15 +451,27 @@ class _SyncedRootState extends State<SyncedRoot> {
     super.dispose();
   }
 
+  // Normal edits: persist + repaint, keeping screen state intact.
   void _onChanged() {
     _model!.save();
     setState(() {});
   }
 
+  // Wholesale data replacement (restore / reset): force caching screens to rebuild.
+  void _onReplaced() {
+    _model!.save();
+    setState(() => _rev++);
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_model == null) return const _LoadingScaffold();
-    return MainScreen(model: _model!, onChanged: _onChanged);
+    return MainScreen(
+      model: _model!,
+      rev: _rev,
+      onChanged: _onChanged,
+      onReplaced: _onReplaced,
+    );
   }
 }
 
@@ -509,14 +564,17 @@ class _AuthScreenState extends State<AuthScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Container(
-                    width: 64,
-                    height: 64,
+                    width: 66,
+                    height: 66,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: kAccentDim,
-                      borderRadius: BorderRadius.circular(18),
+                      gradient: kAccentGradient,
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(color: kAccent.withOpacity(0.35), blurRadius: 22, offset: const Offset(0, 8)),
+                      ],
                     ),
-                    child: const Icon(Icons.bolt_rounded, color: kAccent, size: 34),
+                    child: const Icon(Icons.bolt_rounded, color: Colors.white, size: 36),
                   ),
                   const SizedBox(height: 20),
                   const Text('180 Days · JEE 2027',
@@ -660,7 +718,7 @@ class _AuthScreenState extends State<AuthScreen> {
 //  SHARED WIDGETS
 // ════════════════════════════════════════════════════════════
 
-/// Circular progress ring with a soft glow.
+/// Circular progress ring with a soft glow. Animates to its value on change.
 class ProgressRing extends StatelessWidget {
   final double progress; // 0..1
   final double size;
@@ -681,9 +739,15 @@ class ProgressRing extends StatelessWidget {
     return SizedBox(
       width: size,
       height: size,
-      child: CustomPaint(
-        painter: _RingPainter(progress: progress.clamp(0, 1), color: color, stroke: stroke),
-        child: Center(child: child),
+      child: TweenAnimationBuilder<double>(
+        tween: Tween<double>(begin: 0, end: progress.clamp(0.0, 1.0)),
+        duration: const Duration(milliseconds: 900),
+        curve: Curves.easeOutCubic,
+        builder: (_, value, ringChild) => CustomPaint(
+          painter: _RingPainter(progress: value, color: color, stroke: stroke),
+          child: Center(child: ringChild),
+        ),
+        child: child,
       ),
     );
   }
@@ -742,6 +806,32 @@ class _RingPainter extends CustomPainter {
       old.progress != progress || old.color != color || old.stroke != stroke;
 }
 
+/// Animated, rounded linear progress bar.
+class AnimatedBar extends StatelessWidget {
+  final double value; // 0..1
+  final Color color;
+  final double height;
+  const AnimatedBar({super.key, required this.value, required this.color, this.height = 8});
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(99),
+      child: TweenAnimationBuilder<double>(
+        tween: Tween<double>(begin: 0, end: value.clamp(0.0, 1.0)),
+        duration: const Duration(milliseconds: 700),
+        curve: Curves.easeOutCubic,
+        builder: (_, v, __) => LinearProgressIndicator(
+          value: v,
+          minHeight: height,
+          backgroundColor: kStroke,
+          valueColor: AlwaysStoppedAnimation(color),
+        ),
+      ),
+    );
+  }
+}
+
 /// Standard surface card.
 class Panel extends StatelessWidget {
   final Widget child;
@@ -771,13 +861,51 @@ Widget sectionLabel(String text) => Padding(
   ),
 );
 
+/// Big screen title with a subtitle, used at the top of each tab.
+Widget screenHeader(String title, String subtitle) => Column(
+  crossAxisAlignment: CrossAxisAlignment.start,
+  children: [
+    Text(title, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: kText)),
+    const SizedBox(height: 4),
+    Text(subtitle, style: const TextStyle(fontSize: 13, color: kText3)),
+  ],
+);
+
+/// One floating snackbar style used everywhere.
+void showSnack(BuildContext ctx, String msg, {Color color = kGreen, IconData? icon}) {
+  final messenger = ScaffoldMessenger.of(ctx);
+  messenger.clearSnackBars();
+  messenger.showSnackBar(
+    SnackBar(
+      content: Row(
+        children: [
+          if (icon != null) ...[Icon(icon, color: Colors.white, size: 18), const SizedBox(width: 10)],
+          Expanded(child: Text(msg, style: const TextStyle(fontWeight: FontWeight.w600))),
+        ],
+      ),
+      backgroundColor: color,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      duration: const Duration(seconds: 2),
+    ),
+  );
+}
+
 // ════════════════════════════════════════════════════════════
 //  MAIN SCREEN  (nav shell)
 // ════════════════════════════════════════════════════════════
 class MainScreen extends StatefulWidget {
   final AppModel model;
+  final int rev;
   final VoidCallback onChanged;
-  const MainScreen({super.key, required this.model, required this.onChanged});
+  final VoidCallback onReplaced;
+  const MainScreen({
+    super.key,
+    required this.model,
+    required this.rev,
+    required this.onChanged,
+    required this.onReplaced,
+  });
   @override
   State<MainScreen> createState() => _MainScreenState();
 }
@@ -785,14 +913,28 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int _tab = 0;
 
+  void _go(int i) {
+    if (_tab == i) return;
+    HapticFeedback.selectionClick();
+    setState(() => _tab = i);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final r = widget.rev;
+    // Screens are keyed by `rev` so the ones that cache controllers
+    // (Planner, Settings) rebuild cleanly after a remote sync / restore / reset.
     final screens = [
-      HomeScreen(model: widget.model, onChanged: widget.onChanged),
-      TrackerScreen(model: widget.model, onChanged: widget.onChanged),
-      SubjectsScreen(model: widget.model, onChanged: widget.onChanged),
-      PlannerScreen(model: widget.model, onChanged: widget.onChanged),
-      SettingsScreen(model: widget.model, onChanged: widget.onChanged),
+      HomeScreen(key: ValueKey('home$r'), model: widget.model, onChanged: widget.onChanged, onNavigate: _go),
+      TrackerScreen(key: ValueKey('track$r'), model: widget.model, onChanged: widget.onChanged),
+      SubjectsScreen(key: ValueKey('subj$r'), model: widget.model, onChanged: widget.onChanged),
+      PlannerScreen(key: ValueKey('plan$r'), model: widget.model, onChanged: widget.onChanged),
+      SettingsScreen(
+        key: ValueKey('set$r'),
+        model: widget.model,
+        onChanged: widget.onChanged,
+        onReplaced: widget.onReplaced,
+      ),
     ];
     return Scaffold(
       body: IndexedStack(index: _tab, children: screens),
@@ -818,7 +960,7 @@ class _MainScreenState extends State<MainScreen> {
           child: NavigationBar(
             height: 66,
             selectedIndex: _tab,
-            onDestinationSelected: (i) => setState(() => _tab = i),
+            onDestinationSelected: _go,
             labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
             destinations: const [
               NavigationDestination(icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard_rounded), label: 'Home'),
@@ -840,7 +982,8 @@ class _MainScreenState extends State<MainScreen> {
 class HomeScreen extends StatefulWidget {
   final AppModel model;
   final VoidCallback onChanged;
-  const HomeScreen({super.key, required this.model, required this.onChanged});
+  final ValueChanged<int>? onNavigate;
+  const HomeScreen({super.key, required this.model, required this.onChanged, this.onNavigate});
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -858,7 +1001,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _tick() {
     final target = DateTime.parse(widget.model.targetDate);
-    setState(() => _remaining = target.difference(DateTime.now()));
+    final diff = target.difference(DateTime.now());
+    if (mounted) setState(() => _remaining = diff.isNegative ? Duration.zero : diff);
   }
 
   @override
@@ -881,8 +1025,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final dayNum = (m.currentDayIndex + 1).clamp(1, 180);
     final isDone = m.completedDays.contains(today);
     final quote = kQuotes[DateTime.now().day % kQuotes.length];
-    final progress = m.totalDone / 180;
-    final firstLetter = (m.name.isNotEmpty ? m.name[0] : 'J').toUpperCase();
+    final progress = (m.totalDone / 180).clamp(0.0, 1.0);
+    final firstLetter = (m.name.trim().isNotEmpty ? m.name.trim()[0] : 'J').toUpperCase();
+    final todayTasks = m.dailyTasks[today] ?? const <Task>[];
 
     return SafeArea(
       child: ListView(
@@ -894,7 +1039,7 @@ class _HomeScreenState extends State<HomeScreen> {
               Container(
                 width: 46, height: 46,
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [kAccent, kGold]),
+                  gradient: kAccentGradient,
                   borderRadius: BorderRadius.circular(14),
                 ),
                 child: Center(
@@ -921,32 +1066,47 @@ class _HomeScreenState extends State<HomeScreen> {
 
           // ── Hero ring ──
           Center(
-            child: ProgressRing(
-              progress: progress,
-              size: 230,
-              stroke: 15,
-              color: kAccent,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text('DAY', style: TextStyle(fontSize: 12, color: kText3, letterSpacing: 4, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 2),
-                  Text('$dayNum',
-                      style: const TextStyle(fontSize: 68, fontWeight: FontWeight.w800, color: kText, height: 1)),
-                  Text('of 180',
-                      style: TextStyle(fontSize: 14, color: kText2, fontWeight: FontWeight.w500)),
-                  const SizedBox(height: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: kAccentDim,
-                      borderRadius: BorderRadius.circular(99),
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                // soft radial glow behind the ring
+                Container(
+                  width: 210, height: 210,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [kAccent.withOpacity(0.13), Colors.transparent],
                     ),
-                    child: Text('${(progress * 100).round()}% complete',
-                        style: const TextStyle(fontSize: 12, color: kAccent, fontWeight: FontWeight.w700)),
                   ),
-                ],
-              ),
+                ),
+                ProgressRing(
+                  progress: progress,
+                  size: 230,
+                  stroke: 15,
+                  color: kAccent,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('DAY', style: TextStyle(fontSize: 12, color: kText3, letterSpacing: 4, fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 2),
+                      Text('$dayNum',
+                          style: const TextStyle(fontSize: 68, fontWeight: FontWeight.w800, color: kText, height: 1)),
+                      const Text('of 180',
+                          style: TextStyle(fontSize: 14, color: kText2, fontWeight: FontWeight.w500)),
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: kAccentDim,
+                          borderRadius: BorderRadius.circular(99),
+                        ),
+                        child: Text('${m.totalDone} done · ${(progress * 100).round()}%',
+                            style: const TextStyle(fontSize: 12, color: kAccent, fontWeight: FontWeight.w700)),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 24),
@@ -988,21 +1148,35 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 12),
 
-          // ── Stat chips ──
+          // ── Stat chips (tap to jump to the relevant tab) ──
           Row(
             children: [
-              _statTile(Icons.local_fire_department_rounded, kAccent, '${m.streak}', 'Streak'),
+              _statTile(Icons.local_fire_department_rounded, kAccent, '${m.streak}', 'Streak', () => widget.onNavigate?.call(1)),
               const SizedBox(width: 12),
-              _statTile(Icons.task_alt_rounded, kGreen, '${m.totalDone}', 'Days done'),
+              _statTile(Icons.task_alt_rounded, kGreen, '${m.totalDone}', 'Days done', () => widget.onNavigate?.call(1)),
               const SizedBox(width: 12),
-              _statTile(Icons.menu_book_rounded, kBlue, '${m.doneChapters}', 'Chapters'),
+              _statTile(Icons.menu_book_rounded, kBlue, '${m.doneChapters}', 'Chapters', () => widget.onNavigate?.call(2)),
             ],
           ),
+          const SizedBox(height: 12),
+
+          // ── Today's tasks summary → Planner ──
+          _todayTasksCard(todayTasks),
           const SizedBox(height: 22),
 
           // ── Quote ──
           sectionLabel('Daily fuel'),
-          Panel(
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [kSurfaceHi, kSurface],
+              ),
+              borderRadius: BorderRadius.circular(20),
+              border: const Border(left: BorderSide(color: kAccent, width: 3)),
+            ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1026,7 +1200,7 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 22),
 
           // ── CTA ──
-          _ctaButton(isDone, today),
+          _ctaButton(isDone, today, dayNum),
         ],
       ),
     );
@@ -1057,34 +1231,92 @@ class _HomeScreenState extends State<HomeScreen> {
     ],
   );
 
-  Widget _statTile(IconData icon, Color c, String v, String l) => Expanded(
-    child: Panel(
-      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
-      child: Column(
-        children: [
-          Icon(icon, color: c, size: 24),
-          const SizedBox(height: 8),
-          Text(v, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: kText)),
-          Text(l, style: const TextStyle(fontSize: 11, color: kText3, fontWeight: FontWeight.w600)),
-        ],
+  Widget _statTile(IconData icon, Color c, String v, String l, VoidCallback onTap) => Expanded(
+    child: GestureDetector(
+      onTap: () { HapticFeedback.selectionClick(); onTap(); },
+      behavior: HitTestBehavior.opaque,
+      child: Panel(
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 10),
+        child: Column(
+          children: [
+            Container(
+              width: 38, height: 38,
+              decoration: BoxDecoration(color: c.withOpacity(0.14), borderRadius: BorderRadius.circular(11)),
+              child: Icon(icon, color: c, size: 21),
+            ),
+            const SizedBox(height: 8),
+            Text(v, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: kText)),
+            Text(l, style: const TextStyle(fontSize: 11, color: kText3, fontWeight: FontWeight.w600)),
+          ],
+        ),
       ),
     ),
   );
 
-  Widget _ctaButton(bool isDone, String today) => GestureDetector(
+  Widget _todayTasksCard(List<Task> tasks) {
+    final done = tasks.where((t) => t.done).length;
+    final hasTasks = tasks.isNotEmpty;
+    final allDone = hasTasks && done == tasks.length;
+    return GestureDetector(
+      onTap: () { HapticFeedback.selectionClick(); widget.onNavigate?.call(3); },
+      behavior: HitTestBehavior.opaque,
+      child: Panel(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: [
+            Container(
+              width: 38, height: 38,
+              decoration: BoxDecoration(
+                color: (allDone ? kGreen : kViolet).withOpacity(0.14),
+                borderRadius: BorderRadius.circular(11),
+              ),
+              child: Icon(allDone ? Icons.check_circle_rounded : Icons.checklist_rounded,
+                  color: allDone ? kGreen : kViolet, size: 20),
+            ),
+            const SizedBox(width: 13),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text("Today's tasks",
+                      style: TextStyle(fontSize: 14, color: kText, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  Text(
+                    hasTasks
+                        ? (allDone ? 'All $done done — nice work!' : '$done of ${tasks.length} done')
+                        : 'Tap to plan your day',
+                    style: const TextStyle(fontSize: 12, color: kText2),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded, color: kText3, size: 22),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _ctaButton(bool isDone, String today, int dayNum) => GestureDetector(
     onTap: () {
-      if (isDone) {
-        widget.model.completedDays.remove(today);
-      } else {
+      final nowComplete = !isDone;
+      HapticFeedback.mediumImpact();
+      if (nowComplete) {
         widget.model.completedDays.add(today);
+      } else {
+        widget.model.completedDays.remove(today);
       }
       widget.onChanged();
+      if (nowComplete) {
+        showSnack(context, 'Day $dayNum logged — keep the streak alive!',
+            color: kGreen, icon: Icons.check_circle_rounded);
+      }
     },
     child: AnimatedContainer(
       duration: const Duration(milliseconds: 250),
       padding: const EdgeInsets.symmetric(vertical: 18),
       decoration: BoxDecoration(
-        gradient: isDone ? null : const LinearGradient(colors: [kAccent, Color(0xFFFF8A5B)]),
+        gradient: isDone ? null : kAccentGradient,
         color: isDone ? kSurfaceHi : null,
         borderRadius: BorderRadius.circular(18),
         border: isDone ? Border.all(color: kGreen, width: 1.5) : null,
@@ -1120,18 +1352,14 @@ class TrackerScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final today = _dateStr(DateTime.now());
     final done = model.totalDone;
-    final pct = done / 180;
+    final pct = (done / 180).clamp(0.0, 1.0);
     final cols = MediaQuery.of(context).size.width > 500 ? 20 : 12;
 
     return SafeArea(
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
         children: [
-          const Text('Your 180 days',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: kText)),
-          const SizedBox(height: 4),
-          Text('Tap any day up to today to log it',
-              style: TextStyle(fontSize: 13, color: kText3)),
+          screenHeader('Your 180 days', 'Tap any day up to today to log it'),
           const SizedBox(height: 18),
 
           // Progress header
@@ -1148,14 +1376,7 @@ class TrackerScreen extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 16),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(99),
-                  child: LinearProgressIndicator(
-                    value: pct, minHeight: 8,
-                    backgroundColor: kStroke,
-                    valueColor: const AlwaysStoppedAnimation(kAccent),
-                  ),
-                ),
+                AnimatedBar(value: pct, color: kAccent),
               ],
             ),
           ),
@@ -1190,6 +1411,7 @@ class TrackerScreen extends StatelessWidget {
                 return GestureDetector(
                   onTap: () {
                     if (date.compareTo(today) > 0) return;
+                    HapticFeedback.selectionClick();
                     if (isDone) {
                       model.completedDays.remove(date);
                     } else {
@@ -1293,11 +1515,7 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
         children: [
-          const Text('Syllabus',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: kText)),
-          const SizedBox(height: 4),
-          Text('${m.doneChapters} of ${m.totalChapters} chapters mastered',
-              style: const TextStyle(fontSize: 13, color: kText3)),
+          screenHeader('Syllabus', '${m.doneChapters} of ${m.totalChapters} chapters mastered'),
           const SizedBox(height: 18),
 
           // Three rings overview
@@ -1311,7 +1529,8 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
                   child: Column(
                     children: [
                       ProgressRing(
-                        progress: p, size: 70, stroke: 7, color: kSubjectColors[i],
+                        progress: p, size: 70, stroke: 7,
+                        color: kSubjectColors[i % kSubjectColors.length],
                         child: Text('${(p * 100).round()}',
                             style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: kText)),
                       ),
@@ -1336,7 +1555,7 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
     final chapters = widget.model.subjects[name]!;
     final done = chapters.where((c) => c.done).length;
     final pct = chapters.isEmpty ? 0.0 : done / chapters.length;
-    final color = kSubjectColors[si];
+    final color = kSubjectColors[si % kSubjectColors.length];
     final isOpen = _expanded.contains(si);
 
     return Container(
@@ -1350,7 +1569,10 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
         children: [
           // Header (tap to expand)
           GestureDetector(
-            onTap: () => setState(() => isOpen ? _expanded.remove(si) : _expanded.add(si)),
+            onTap: () {
+              HapticFeedback.selectionClick();
+              setState(() => isOpen ? _expanded.remove(si) : _expanded.add(si));
+            },
             behavior: HitTestBehavior.opaque,
             child: Padding(
               padding: const EdgeInsets.all(18),
@@ -1362,7 +1584,7 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
                       color: color.withOpacity(0.14),
                       borderRadius: BorderRadius.circular(13),
                     ),
-                    child: Icon(kSubjectIcons[si], color: color, size: 24),
+                    child: Icon(kSubjectIcons[si % kSubjectIcons.length], color: color, size: 24),
                   ),
                   const SizedBox(width: 14),
                   Expanded(
@@ -1373,16 +1595,7 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
                         const SizedBox(height: 6),
                         Row(
                           children: [
-                            Expanded(
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(99),
-                                child: LinearProgressIndicator(
-                                  value: pct, minHeight: 6,
-                                  backgroundColor: kStroke,
-                                  valueColor: AlwaysStoppedAnimation(color),
-                                ),
-                              ),
-                            ),
+                            Expanded(child: AnimatedBar(value: pct, color: color, height: 6)),
                             const SizedBox(width: 10),
                             Text('$done/${chapters.length}',
                                 style: const TextStyle(fontSize: 12, color: kText3, fontWeight: FontWeight.w700)),
@@ -1408,7 +1621,7 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
               padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
               child: Column(
                 children: [
-                  ...chapters.asMap().entries.map((e) => _chapterRow(chapters, e.key, e.value, color)),
+                  ...chapters.map((ch) => _chapterRow(chapters, ch, color)),
                   const SizedBox(height: 4),
                   GestureDetector(
                     onTap: () => _addChapter(context, name, chapters),
@@ -1435,7 +1648,7 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
     );
   }
 
-  Widget _chapterRow(List<Chapter> chapters, int idx, Chapter ch, Color subjColor) {
+  Widget _chapterRow(List<Chapter> chapters, Chapter ch, Color subjColor) {
     final pColor = ch.priority == 'high' ? kRed : ch.priority == 'low' ? kGreen : kGold;
     void remove() {
       setState(() => chapters.remove(ch));
@@ -1453,7 +1666,11 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
         child: const Icon(Icons.delete_outline_rounded, color: kRed, size: 20),
       ),
       child: GestureDetector(
-        onTap: () { setState(() => ch.done = !ch.done); widget.onChanged(); },
+        onTap: () {
+          HapticFeedback.selectionClick();
+          setState(() => ch.done = !ch.done);
+          widget.onChanged();
+        },
         behavior: HitTestBehavior.opaque,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 11),
@@ -1592,7 +1809,7 @@ Widget _sheetField(TextEditingController ctrl, String hint) => TextField(
 );
 
 // ════════════════════════════════════════════════════════════
-//  FOCUS / TASKS
+//  PLANNER  (today's tasks + monthly plan)
 // ════════════════════════════════════════════════════════════
 class PlannerScreen extends StatefulWidget {
   final AppModel model;
@@ -1606,6 +1823,8 @@ class _PlannerScreenState extends State<PlannerScreen> {
   final _ctrl = TextEditingController();
   final Map<String, TextEditingController> _planCtrls = {};
   final Set<String> _openMonths = {};
+  Timer? _planSaveTimer;
+  bool _planDirty = false;
 
   static const _monthNames = [
     '', 'January', 'February', 'March', 'April', 'May', 'June',
@@ -1634,10 +1853,17 @@ class _PlannerScreenState extends State<PlannerScreen> {
         () => TextEditingController(text: widget.model.monthlyPlans[monthKey]?[subject] ?? ''));
   }
 
-  void _savePlan(String monthKey, String subject, String text) {
+  // Update the in-memory model immediately, but debounce the (cloud) write so
+  // we don't fire a Firestore write on every keystroke.
+  void _onPlanChanged(String monthKey, String subject, String text) {
     widget.model.monthlyPlans.putIfAbsent(monthKey, () => {});
     widget.model.monthlyPlans[monthKey]![subject] = text;
-    widget.model.save();
+    _planDirty = true;
+    _planSaveTimer?.cancel();
+    _planSaveTimer = Timer(const Duration(milliseconds: 800), () {
+      widget.model.save();
+      _planDirty = false;
+    });
   }
 
   @override
@@ -1649,6 +1875,8 @@ class _PlannerScreenState extends State<PlannerScreen> {
 
   @override
   void dispose() {
+    _planSaveTimer?.cancel();
+    if (_planDirty) widget.model.save(); // flush any pending plan edit
     _ctrl.dispose();
     for (final c in _planCtrls.values) {
       c.dispose();
@@ -1664,11 +1892,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
         children: [
-          const Text('Planner',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: kText)),
-          const SizedBox(height: 4),
-          const Text('Plan each month and your day',
-              style: TextStyle(fontSize: 13, color: kText3)),
+          screenHeader('Planner', 'Plan each month and your day'),
           const SizedBox(height: 20),
 
           // Tasks
@@ -1691,6 +1915,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
                   controller: _ctrl,
                   style: const TextStyle(color: kText, fontSize: 15),
                   cursorColor: kAccent,
+                  textCapitalization: TextCapitalization.sentences,
                   decoration: InputDecoration(
                     hintText: 'Add a task…',
                     hintStyle: const TextStyle(color: kText3),
@@ -1707,7 +1932,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
                 onTap: _addTask,
                 child: Container(
                   padding: const EdgeInsets.all(15),
-                  decoration: BoxDecoration(color: kAccent, borderRadius: BorderRadius.circular(14)),
+                  decoration: BoxDecoration(gradient: kAccentGradient, borderRadius: BorderRadius.circular(14)),
                   child: const Icon(Icons.add_rounded, color: Colors.white, size: 24),
                 ),
               ),
@@ -1727,7 +1952,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
               ),
             )
           else
-            ...tasks.asMap().entries.map((e) => _taskRow(e.key, e.value)),
+            ...tasks.map(_taskRow),
 
           const SizedBox(height: 26),
           sectionLabel('Monthly planner'),
@@ -1754,7 +1979,10 @@ class _PlannerScreenState extends State<PlannerScreen> {
       child: Column(
         children: [
           GestureDetector(
-            onTap: () => setState(() => isOpen ? _openMonths.remove(key) : _openMonths.add(key)),
+            onTap: () {
+              HapticFeedback.selectionClick();
+              setState(() => isOpen ? _openMonths.remove(key) : _openMonths.add(key));
+            },
             behavior: HitTestBehavior.opaque,
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -1832,7 +2060,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
                         const SizedBox(height: 7),
                         TextField(
                           controller: _planCtrl(key, subject),
-                          onChanged: (v) => _savePlan(key, subject, v),
+                          onChanged: (v) => _onPlanChanged(key, subject, v),
                           minLines: 2,
                           maxLines: 6,
                           textCapitalization: TextCapitalization.sentences,
@@ -1862,11 +2090,11 @@ class _PlannerScreenState extends State<PlannerScreen> {
     );
   }
 
-  Widget _taskRow(int idx, Task t) => Dismissible(
-    key: Key('task-$idx-${t.text}'),
+  Widget _taskRow(Task t) => Dismissible(
+    key: ObjectKey(t),
     direction: DismissDirection.endToStart,
     onDismissed: (_) {
-      widget.model.dailyTasks[_today]!.removeAt(idx);
+      widget.model.dailyTasks[_today]?.remove(t);
       widget.onChanged();
     },
     background: Container(
@@ -1877,7 +2105,11 @@ class _PlannerScreenState extends State<PlannerScreen> {
       child: const Icon(Icons.delete_outline_rounded, color: kRed),
     ),
     child: GestureDetector(
-      onTap: () { setState(() => t.done = !t.done); widget.onChanged(); },
+      onTap: () {
+        HapticFeedback.selectionClick();
+        setState(() => t.done = !t.done);
+        widget.onChanged();
+      },
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
@@ -1916,6 +2148,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
   void _addTask() {
     final text = _ctrl.text.trim();
     if (text.isEmpty) return;
+    HapticFeedback.selectionClick();
     widget.model.dailyTasks.putIfAbsent(_today, () => []);
     widget.model.dailyTasks[_today]!.add(Task(text: text));
     _ctrl.clear();
@@ -1929,7 +2162,13 @@ class _PlannerScreenState extends State<PlannerScreen> {
 class SettingsScreen extends StatefulWidget {
   final AppModel model;
   final VoidCallback onChanged;
-  const SettingsScreen({super.key, required this.model, required this.onChanged});
+  final VoidCallback onReplaced;
+  const SettingsScreen({
+    super.key,
+    required this.model,
+    required this.onChanged,
+    required this.onReplaced,
+  });
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
@@ -1972,6 +2211,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _fieldRow('Your name', TextField(
                   controller: _nameCtrl,
                   textAlign: TextAlign.right,
+                  textCapitalization: TextCapitalization.words,
                   style: const TextStyle(color: kText, fontWeight: FontWeight.w600),
                   cursorColor: kAccent,
                   decoration: const InputDecoration(
@@ -1991,18 +2231,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
             width: double.infinity,
             child: FilledButton(
               onPressed: () {
+                if (_targetDate.isBefore(_startDate)) {
+                  showSnack(context, 'Target date must be after the start date',
+                      color: kRed, icon: Icons.error_outline_rounded);
+                  return;
+                }
                 m.name = _nameCtrl.text.trim().isEmpty ? 'JEE Aspirant' : _nameCtrl.text.trim();
                 m.startDate = _dateStr(_startDate);
                 m.targetDate = _dateStr(_targetDate);
+                FocusScope.of(context).unfocus();
                 widget.onChanged();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: const Text('Settings saved'),
-                    backgroundColor: kGreen,
-                    behavior: SnackBarBehavior.floating,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                );
+                showSnack(context, 'Settings saved', color: kGreen, icon: Icons.check_circle_rounded);
               },
               style: FilledButton.styleFrom(
                 backgroundColor: kAccent,
@@ -2022,9 +2261,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const Divider(height: 22, color: kStroke),
                 _statRow(Icons.local_fire_department_rounded, kAccent, 'Current streak', '${m.streak} days'),
                 const Divider(height: 22, color: kStroke),
+                _statRow(Icons.emoji_events_rounded, kGold, 'Longest streak', '${m.bestStreak} days'),
+                const Divider(height: 22, color: kStroke),
                 _statRow(Icons.menu_book_rounded, kViolet, 'Chapters done', '${m.doneChapters}/${m.totalChapters}'),
                 const Divider(height: 22, color: kStroke),
-                _statRow(Icons.trending_up_rounded, kGold, 'Overall progress', '${(m.totalDone / 180 * 100).round()}%'),
+                _statRow(Icons.trending_up_rounded, kBlue, 'Overall progress', '${(m.totalDone / 180 * 100).clamp(0, 100).round()}%'),
               ],
             ),
           ),
@@ -2109,9 +2350,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          const Center(
-            child: Text('180 Days · JEE 2027  ·  v1.1',
-                style: TextStyle(fontSize: 12, color: kText3)),
+          Center(
+            child: Text('180 Days · JEE 2027  ·  v$kVersion',
+                style: const TextStyle(fontSize: 12, color: kText3)),
           ),
         ],
       ),
@@ -2211,21 +2452,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void _exportData(BuildContext ctx) {
     final data = jsonEncode(widget.model.toJson());
     Clipboard.setData(ClipboardData(text: data));
-    ScaffoldMessenger.of(ctx).showSnackBar(
-      SnackBar(
-        content: const Text('Backup copied to clipboard'),
-        backgroundColor: kGreen,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-    );
+    showSnack(ctx, 'Backup copied to clipboard', color: kGreen, icon: Icons.check_circle_rounded);
   }
 
   void _importData(BuildContext ctx) {
     final ctrl = TextEditingController();
+    // Capture a stable messenger up front: applying a restore bumps `rev`,
+    // which rebuilds this screen and would invalidate `ctx` for a later lookup.
+    final messenger = ScaffoldMessenger.of(ctx);
     showDialog(
       context: ctx,
-      builder: (_) => AlertDialog(
+      builder: (dctx) => AlertDialog(
         backgroundColor: kSurface,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text('Restore data', style: TextStyle(color: kText, fontWeight: FontWeight.w700)),
@@ -2260,7 +2497,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx),
+              onPressed: () => Navigator.pop(dctx),
               child: const Text('Cancel', style: TextStyle(color: kText2))),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: kGreen),
@@ -2268,30 +2505,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               try {
                 final parsed = jsonDecode(ctrl.text.trim()) as Map<String, dynamic>;
                 widget.model.applyJson(parsed);
-                widget.onChanged();
-                Navigator.pop(ctx);
-                setState(() {
-                  _nameCtrl.text = widget.model.name;
-                  _startDate = DateTime.parse(widget.model.startDate);
-                  _targetDate = DateTime.parse(widget.model.targetDate);
-                });
-                ScaffoldMessenger.of(ctx).showSnackBar(
-                  SnackBar(
-                    content: const Text('Data restored'),
-                    backgroundColor: kGreen,
-                    behavior: SnackBarBehavior.floating,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                );
+                Navigator.pop(dctx);
+                widget.onReplaced(); // persist + rebuild every screen from fresh data
+                _snack(messenger, 'Data restored', kGreen);
               } catch (_) {
-                ScaffoldMessenger.of(ctx).showSnackBar(
-                  SnackBar(
-                    content: const Text("That doesn't look like a valid backup"),
-                    backgroundColor: kRed,
-                    behavior: SnackBarBehavior.floating,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                );
+                _snack(messenger, "That doesn't look like a valid backup", kRed);
               }
             },
             child: const Text('Restore', style: TextStyle(fontWeight: FontWeight.w700)),
@@ -2301,10 +2519,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  // Snackbar via a pre-captured messenger (safe across a `rev` rebuild).
+  void _snack(ScaffoldMessengerState messenger, String msg, Color color) {
+    messenger.clearSnackBars();
+    messenger.showSnackBar(SnackBar(
+      content: Text(msg, style: const TextStyle(fontWeight: FontWeight.w600)),
+      backgroundColor: color,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    ));
+  }
+
   void _confirmSignOut(BuildContext ctx) {
     showDialog(
       context: ctx,
-      builder: (_) => AlertDialog(
+      builder: (dctx) => AlertDialog(
         backgroundColor: kSurface,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text('Sign out?', style: TextStyle(color: kText, fontWeight: FontWeight.w700)),
@@ -2313,12 +2542,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             style: TextStyle(color: kText2)),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx),
+              onPressed: () => Navigator.pop(dctx),
               child: const Text('Cancel', style: TextStyle(color: kText2))),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: kAccent),
             onPressed: () {
-              Navigator.pop(ctx);
+              Navigator.pop(dctx);
               SyncService.signOut();
             },
             child: const Text('Sign out', style: TextStyle(fontWeight: FontWeight.w700)),
@@ -2329,16 +2558,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _confirmReset(BuildContext ctx) {
+    final messenger = ScaffoldMessenger.of(ctx);
     showDialog(
       context: ctx,
-      builder: (_) => AlertDialog(
+      builder: (dctx) => AlertDialog(
         backgroundColor: kSurface,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text('Reset all data?', style: TextStyle(color: kText, fontWeight: FontWeight.w700)),
-        content: const Text('This deletes all your progress, tasks and study time. This cannot be undone.',
+        content: const Text('This deletes all your progress, tasks, plans and study time. This cannot be undone.',
             style: TextStyle(color: kText2)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx),
+          TextButton(onPressed: () => Navigator.pop(dctx),
               child: const Text('Cancel', style: TextStyle(color: kText2))),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: kRed),
@@ -2347,11 +2577,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
               m.completedDays.clear();
               m.dailyTasks.clear();
               m.studyMinutes.clear();
+              m.monthlyPlans.clear();
               for (final chapters in m.subjects.values) {
-                for (final c in chapters) c.done = false;
+                for (final c in chapters) {
+                  c.done = false;
+                }
               }
-              widget.onChanged();
-              Navigator.pop(ctx);
+              Navigator.pop(dctx);
+              widget.onReplaced(); // persist + rebuild every screen from fresh data
+              _snack(messenger, 'All data reset', kRed);
             },
             child: const Text('Reset', style: TextStyle(fontWeight: FontWeight.w700)),
           ),
